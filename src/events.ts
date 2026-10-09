@@ -17,6 +17,11 @@ export interface Event {
 	createdAt: number;
 }
 
+export interface EventReceivedMessage {
+	type: "event.received";
+	eventId: string;
+}
+
 const ALLOWED_METHODS = new Set([
 	"GET",
 	"POST",

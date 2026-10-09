@@ -3,11 +3,25 @@ import {
 	validateEventInput,
 } from "./events";
 
+import type { EventReceivedMessage } from "./events";
+
 export interface Env {
 	edgeguard_db: D1Database;
+	EVENTS_QUEUE: Queue<EventReceivedMessage>;
 }
 
 export default {
+	async queue(batch, env): Promise<void> {
+		for (const message of batch.messages) {
+			console.log(
+				"Consumed event message:",
+				JSON.stringify(message.body),
+			);
+
+			message.ack();
+		}
+	},
+
 	async fetch(
 		request: Request,
 		env: Env,
@@ -17,10 +31,7 @@ export default {
 		const method = request.method;
 
 		// Health check endpoint
-		if (
-			method === "GET" &&
-			path === "/health"
-		) {
+		if (method === "GET" && path === "/health") {
 			return Response.json({
 				status: "ok",
 				timestamp: new Date().toISOString(),
@@ -28,10 +39,7 @@ export default {
 		}
 
 		// List stored events
-		if (
-			method === "GET" &&
-			path === "/api/events"
-		) {
+		if (method === "GET" && path === "/api/events") {
 			const limitParam =
 				url.searchParams.get("limit") ?? "20";
 			const limit = Number(limitParam);
@@ -74,19 +82,14 @@ export default {
 				});
 			} catch {
 				return Response.json(
-					{
-						error: "Failed to fetch events",
-					},
+					{ error: "Failed to fetch events" },
 					{ status: 500 },
 				);
 			}
 		}
 
 		// Ingest a new event
-		if (
-			method === "POST" &&
-			path === "/api/events"
-		) {
+		if (method === "POST" && path === "/api/events") {
 			let body: unknown;
 
 			try {
@@ -102,9 +105,7 @@ export default {
 
 			if (!input) {
 				return Response.json(
-					{
-						error: "Invalid event payload",
-					},
+					{ error: "Invalid event payload" },
 					{ status: 400 },
 				);
 			}
@@ -115,15 +116,18 @@ export default {
 					input,
 				);
 
+				await env.EVENTS_QUEUE.send({
+					type: "event.received",
+					eventId: event.id,
+				});
+
 				return Response.json(
 					{ data: event },
 					{ status: 201 },
 				);
 			} catch {
 				return Response.json(
-					{
-						error: "Failed to store event",
-					},
+					{ error: "Failed to store event" },
 					{ status: 500 },
 				);
 			}

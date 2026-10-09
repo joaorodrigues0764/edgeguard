@@ -16,7 +16,23 @@
 			"database_name": "edgeguard-db",
 			"database_id": "8620ccdd-c40c-4959-a73c-7595a242bb54"
 		}
+	],
+
+	"queues": {
+	"producers": [
+		{
+			"queue": "edgeguard-events",
+			"binding": "EVENTS_QUEUE"
+		}
+	],
+	"consumers": [
+		{
+			"queue": "edgeguard-events",
+			"max_batch_size": 10,
+			"max_batch_timeout": 5
+		}
 	]
+	}	
 
 	/**
 	 * Smart Placement
