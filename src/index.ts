@@ -8,10 +8,12 @@ import {
 	createIncident,
 	getEventForAnalysis,
 } from "./incidents";
+import { writeEventTelemetry } from "./telemetry";
 
 export interface Env {
 	edgeguard_db: D1Database;
 	EVENTS_QUEUE: Queue<EventReceivedMessage>;
+	EDGEGUARD_ANALYTICS: AnalyticsEngineDataset;
 }
 
 function isEventReceivedMessage(
@@ -35,7 +37,6 @@ export default {
 		for (const message of batch.messages) {
 			const body: unknown = message.body;
 
-			// Invalid messages will not become valid through retrying.
 			if (!isEventReceivedMessage(body)) {
 				console.warn(
 					"Discarding invalid queue message:",
@@ -52,7 +53,6 @@ export default {
 					body.eventId,
 				);
 
-				// The event may have been removed before processing.
 				if (!event) {
 					console.warn(
 						`Event ${body.eventId} was not found`,
@@ -78,7 +78,6 @@ export default {
 					}
 				}
 
-				// A normal event is also successfully processed.
 				message.ack();
 			} catch (error) {
 				console.error(
@@ -86,7 +85,6 @@ export default {
 					error,
 				);
 
-				// Ask Cloudflare Queues to retry this message.
 				message.retry();
 			}
 		}
@@ -185,6 +183,20 @@ export default {
 					env.edgeguard_db,
 					input,
 				);
+
+				// Analytics is supplementary; a telemetry failure
+				// should not prevent event ingestion.
+				try {
+					writeEventTelemetry(
+						env.EDGEGUARD_ANALYTICS,
+						event,
+					);
+				} catch (error) {
+					console.error(
+						"Failed to write event telemetry:",
+						error,
+					);
+				}
 
 				await env.EVENTS_QUEUE.send({
 					type: "event.received",
