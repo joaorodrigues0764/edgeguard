@@ -65,15 +65,17 @@ export default {
 				const anomaly = detectAnomaly(event);
 
 				if (anomaly) {
-					await createIncident(
+					const created = await createIncident(
 						env.edgeguard_db,
 						event.id,
 						anomaly,
 					);
 
-					console.log(
-						`Created ${anomaly.severity} incident for event ${event.id}`,
-					);
+					if (created) {
+						console.log(
+							`Created ${anomaly.severity} incident for event ${event.id}`,
+						);
+					}
 				}
 
 				// A normal event is also successfully processed.
