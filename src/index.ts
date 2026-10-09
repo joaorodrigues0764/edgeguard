@@ -1,24 +1,92 @@
 import {
 	insertEvent,
 	validateEventInput,
+	type EventReceivedMessage,
 } from "./events";
-
-import type { EventReceivedMessage } from "./events";
+import { detectAnomaly } from "./anomaly";
+import {
+	createIncident,
+	getEventForAnalysis,
+} from "./incidents";
 
 export interface Env {
 	edgeguard_db: D1Database;
 	EVENTS_QUEUE: Queue<EventReceivedMessage>;
 }
 
-export default {
-	async queue(batch, env): Promise<void> {
-		for (const message of batch.messages) {
-			console.log(
-				"Consumed event message:",
-				JSON.stringify(message.body),
-			);
+function isEventReceivedMessage(
+	body: unknown,
+): body is EventReceivedMessage {
+	if (typeof body !== "object" || body === null) {
+		return false;
+	}
 
-			message.ack();
+	const candidate = body as Record<string, unknown>;
+
+	return (
+		candidate.type === "event.received" &&
+		typeof candidate.eventId === "string" &&
+		candidate.eventId.length > 0
+	);
+}
+
+export default {
+	async queue(batch, env, ctx): Promise<void> {
+		for (const message of batch.messages) {
+			const body: unknown = message.body;
+
+			// Invalid messages will not become valid through retrying.
+			if (!isEventReceivedMessage(body)) {
+				console.warn(
+					"Discarding invalid queue message:",
+					JSON.stringify(body),
+				);
+
+				message.ack();
+				continue;
+			}
+
+			try {
+				const event = await getEventForAnalysis(
+					env.edgeguard_db,
+					body.eventId,
+				);
+
+				// The event may have been removed before processing.
+				if (!event) {
+					console.warn(
+						`Event ${body.eventId} was not found`,
+					);
+
+					message.ack();
+					continue;
+				}
+
+				const anomaly = detectAnomaly(event);
+
+				if (anomaly) {
+					await createIncident(
+						env.edgeguard_db,
+						event.id,
+						anomaly,
+					);
+
+					console.log(
+						`Created ${anomaly.severity} incident for event ${event.id}`,
+					);
+				}
+
+				// A normal event is also successfully processed.
+				message.ack();
+			} catch (error) {
+				console.error(
+					`Failed to process event ${body.eventId}:`,
+					error,
+				);
+
+				// Ask Cloudflare Queues to retry this message.
+				message.retry();
+			}
 		}
 	},
 
