@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { buildEventDataPoint } from "../src/telemetry";
+import {
+	buildEventDataPoint,
+	buildRateLimitedDataPoint,
+} from "../src/telemetry";
 
 describe("Event telemetry", () => {
 	it("maps server-error events to analytics data points", () => {
@@ -15,13 +18,14 @@ describe("Event telemetry", () => {
 				"GET",
 				"/api/products",
 				"500",
+				"observed_event",
 			],
 			doubles: [1, 892, 1, 0],
 			indexes: ["GET"],
 		});
 	});
 
-	it("records rate-limited requests", () => {
+	it("records rate-limited responses from monitored services", () => {
 		const point = buildEventDataPoint({
 			method: "POST",
 			path: "/api/login",
@@ -29,14 +33,16 @@ describe("Event telemetry", () => {
 			latencyMs: 120,
 		});
 
-		expect(point.doubles).toEqual([
-			1,
-			120,
-			0,
-			1,
-		]);
-
-		expect(point.indexes).toEqual(["POST"]);
+		expect(point).toEqual({
+			blobs: [
+				"POST",
+				"/api/login",
+				"429",
+				"observed_event",
+			],
+			doubles: [1, 120, 0, 1],
+			indexes: ["POST"],
+		});
 	});
 
 	it("records normal requests without error flags", () => {
@@ -47,11 +53,30 @@ describe("Event telemetry", () => {
 			latencyMs: 50,
 		});
 
-		expect(point.doubles).toEqual([
-			1,
-			50,
-			0,
-			0,
-		]);
+		expect(point).toEqual({
+			blobs: [
+				"GET",
+				"/api/health",
+				"200",
+				"observed_event",
+			],
+			doubles: [1, 50, 0, 0],
+			indexes: ["GET"],
+		});
+	});
+
+	it("records rate-limited ingestion requests separately", () => {
+		const point = buildRateLimitedDataPoint();
+
+		expect(point).toEqual({
+			blobs: [
+				"POST",
+				"/api/events",
+				"429",
+				"rate_limited_ingestion",
+			],
+			doubles: [1, 0, 0, 1],
+			indexes: ["POST"],
+		});
 	});
 });

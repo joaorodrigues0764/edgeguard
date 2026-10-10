@@ -8,12 +8,16 @@ import {
 	createIncident,
 	getEventForAnalysis,
 } from "./incidents";
-import { writeEventTelemetry } from "./telemetry";
+import {
+	writeEventTelemetry,
+	writeRateLimitedTelemetry,
+} from "./telemetry";
 
 export interface Env {
 	edgeguard_db: D1Database;
 	EVENTS_QUEUE: Queue<EventReceivedMessage>;
 	EDGEGUARD_ANALYTICS: AnalyticsEngineDataset;
+	EVENT_INGEST_RATE_LIMITER: RateLimit;
 }
 
 function isEventReceivedMessage(
@@ -158,6 +162,42 @@ export default {
 
 		// Ingest a new event
 		if (method === "POST" && path === "/api/events") {
+			const clientAddress =
+				request.headers.get("cf-connecting-ip") ??
+				"local-development";
+
+			const { success } =
+				await env.EVENT_INGEST_RATE_LIMITER.limit({
+					key: `POST:/api/events:${clientAddress}`,
+				});
+
+			if (!success) {
+				try {
+					writeRateLimitedTelemetry(
+						env.EDGEGUARD_ANALYTICS,
+					);
+				} catch (error) {
+					console.error(
+						"Failed to record rate-limited request:",
+						error,
+					);
+				}
+
+				return Response.json(
+					{
+						error: "Rate limit exceeded",
+						message:
+							"Too many event ingestion requests. Try again shortly.",
+					},
+					{
+						status: 429,
+						headers: {
+							"Retry-After": "10",
+						},
+					},
+				);
+			}
+
 			let body: unknown;
 
 			try {

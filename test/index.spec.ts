@@ -242,6 +242,69 @@ describe("EdgeGuard Worker", () => {
 				"limit must be an integer between 1 and 100",
 		});
 	});
+
+	
+	it("rate limits repeated event-ingestion requests", async () => {
+		const responses: Array<{
+			clientId: string;
+			response: Response;
+		}> = [];
+
+		for (let i = 0; i < 20; i++) {
+			const clientId = `rate-test-${i}`;
+
+			const request = new Request(
+				"http://example.com/api/events",
+				{
+					method: "POST",
+					headers: {
+						"Content-Type": "application/json",
+						"cf-connecting-ip": "192.0.2.42",
+					},
+					body: JSON.stringify({
+						method: "GET",
+						path: "/api/products",
+						status: 200,
+						latencyMs: 25,
+						clientId,
+					}),
+				},
+			);
+
+			const response = await exports.default.fetch(request);
+
+			responses.push({ clientId, response });
+		}
+
+		const rejectedRequests = responses.filter(
+			({ response }) => response.status === 429,
+		);
+
+		expect(rejectedRequests.length).toBeGreaterThan(0);
+
+		for (const { clientId, response } of rejectedRequests) {
+			expect(await response.json()).toMatchObject({
+				error: "Rate limit exceeded",
+			});
+
+			expect(response.headers.get("Retry-After")).toBe("10");
+
+			const storedEvent = await env.edgeguard_db
+				.prepare(
+					"SELECT id FROM events WHERE client_id = ?",
+				)
+				.bind(clientId)
+				.first();
+
+			expect(storedEvent).toBeNull();
+		}
+
+		expect(
+			responses.every(({ response }) =>
+				response.status === 201 || response.status === 429
+			),
+		).toBe(true);
+	});
 });
 
 describe("Anomaly detection", () => {

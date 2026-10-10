@@ -34,5 +34,15 @@
 			"binding": "EDGEGUARD_ANALYTICS",
 			"dataset": "edgeguard_telemetry"
 		}
+	],
+	"ratelimits": [
+		{
+			"name": "EVENT_INGEST_RATE_LIMITER",
+			"namespace_id": "73100826",
+			"simple": {
+				"limit": 10,
+				"period": 10
+			}
+		}
 	]
 }
