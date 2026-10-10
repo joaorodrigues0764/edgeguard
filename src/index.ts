@@ -8,6 +8,7 @@ import {
     createIncident,
     getEventForAnalysis,
     listIncidents,
+	updateIncidentStatus,
     type IncidentSeverity,
     type IncidentStatus,
 } from "./incidents";
@@ -258,6 +259,89 @@ export default {
                     },
                 	{ status: 500 },
                 );
+            }
+        }
+                
+		// Update an incident's status
+        const incidentPathMatch = path.match(
+                /^\/api\/incidents\/([^/]+)$/,
+        );
+
+        if (
+            method === "PATCH" &&
+            incidentPathMatch !== null
+        ) {
+            const incidentId = incidentPathMatch[1];
+
+            let body: unknown;
+
+            try {
+                    body = await request.json();
+            } catch {
+                    return Response.json(
+                            { error: "Invalid JSON body" },
+                            { status: 400 },
+                    );
+            }
+
+            if (
+                typeof body !== "object" ||
+                body === null ||
+                Array.isArray(body)
+            ) {
+                return Response.json(
+                        { error: "Invalid incident payload" },
+                        { status: 400 },
+                );
+            }
+
+            const statusParam = (
+                    body as Record<string, unknown>
+            ).status;
+
+            if (
+                typeof statusParam !== "string" ||
+                !isIncidentStatus(statusParam)
+        	) {
+                return Response.json(
+                        {
+                            error:
+                                "status must be open or resolved",
+                    	},
+                        { status: 400 },
+                );
+            }
+
+            try {
+                const incident =
+                        await updateIncidentStatus(
+                            env.edgeguard_db,
+                            incidentId,
+                            statusParam,
+                        );
+
+                    if (!incident) {
+                        return Response.json(
+                            { error: "Incident not found" },
+                            { status: 404 },
+                        );
+                    }
+
+                    return Response.json({
+                        data: incident,
+                    });
+            } catch (error) {
+                    console.error(
+                        "Failed to update incident:",
+                        error,
+                    );
+
+                    return Response.json(
+                        {
+                            error: "Failed to update incident",
+                        },
+                        { status: 500 },
+                    );
             }
         }
 

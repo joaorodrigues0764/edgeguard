@@ -125,3 +125,45 @@ export async function listIncidents(
 
     return result.results;
 }
+
+export async function updateIncidentStatus(
+    db: D1Database,
+    incidentId: string,
+    status: IncidentStatus,
+): Promise<IncidentRecord | null> {
+    const result = await db
+        .prepare(`
+            UPDATE incidents
+            SET status = ?
+            WHERE id = ?
+        `)
+        .bind(status, incidentId)
+        .run();
+
+    if (result.meta.changes === 0) {
+        return null;
+    }
+
+    const incident = await db
+        .prepare(`
+            SELECT
+                i.id,
+                i.event_id AS eventId,
+                i.severity,
+                i.reason,
+                i.status,
+                i.created_at AS createdAt,
+                e.method AS eventMethod,
+                e.path AS eventPath,
+                e.status AS eventStatus,
+                e.latency_ms AS eventLatencyMs,
+                e.occurred_at AS eventOccurredAt
+            FROM incidents AS i
+            INNER JOIN events AS e ON e.id = i.event_id
+            WHERE i.id = ?
+        `)
+        .bind(incidentId)
+        .first<IncidentRecord>();
+
+    return incident ?? null;
+}

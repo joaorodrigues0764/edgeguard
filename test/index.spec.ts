@@ -46,6 +46,10 @@ interface IncidentListResponse {
         data: Incident[];
 }
 
+interface IncidentResponse {
+        data: Incident;
+}
+
 interface ErrorResponse {
 	error: string;
 }
@@ -67,7 +71,7 @@ interface TestIncidentInput {
 
 async function seedIncident(
     input: TestIncidentInput,
-): Promise<void> {
+): Promise<string> {
     const event = await insertEvent(env.edgeguard_db, {
         method: "GET",
         path: input.path,
@@ -75,29 +79,32 @@ async function seedIncident(
         latencyMs: input.latencyMs,
     });
 
+    const incidentId = crypto.randomUUID();
+
     await env.edgeguard_db
         .prepare(`
             INSERT INTO incidents (
-				id,
-				event_id,
-				severity,
-				reason,
-				status,
-				created_at
+                id,
+                event_id,
+                severity,
+                reason,
+                status,
+                created_at
             )
             VALUES (?, ?, ?, ?, ?, ?)
         `)
         .bind(
-            crypto.randomUUID(),
-	        event.id,
+            incidentId,
+            event.id,
             input.severity,
             `Test ${input.severity} incident`,
             input.status,
             input.createdAt,
         )
         .run();
-}
 
+    return incidentId;
+}
 
 describe("EdgeGuard Worker", () => {
 	beforeEach(async () => {
@@ -488,6 +495,168 @@ describe("EdgeGuard Worker", () => {
             expect(body.error).toBe(
                     "limit must be an integer between 1 and 100",
             );
+    });
+    
+	it("resolves an open incident", async () => {
+        const incidentId = await seedIncident({
+            severity: "high",
+            status: "open",
+            path: "/api/products",
+            eventStatus: 500,
+            latencyMs: 892,
+            createdAt: 1000,
+        });
+
+        const response = await exports.default.fetch(
+            `http://example.com/api/incidents/${incidentId}`,
+            {
+                method: "PATCH",
+                headers: {
+                        "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                        status: "resolved",
+                }),
+            },
+        );
+
+        expect(response.status).toBe(200);
+
+        const body =
+            await readJson<IncidentResponse>(response);
+
+        expect(body.data).toMatchObject({
+            id: incidentId,
+            severity: "high",
+            status: "resolved",
+        });
+
+        const storedIncident = await env.edgeguard_db
+            .prepare(
+                "SELECT status FROM incidents WHERE id = ?",
+            )
+            .bind(incidentId)
+            .first<{ status: string }>();
+
+        expect(storedIncident?.status).toBe("resolved");
+    });
+    
+	it("reopens a resolved incident", async () => {
+        const incidentId = await seedIncident({
+            severity: "critical",
+            status: "resolved",
+            path: "/api/checkout",
+            eventStatus: 500,
+            latencyMs: 6000,
+            createdAt: 2000,
+        });
+
+        const response = await exports.default.fetch(
+            `http://example.com/api/incidents/${incidentId}`,
+            {
+                method: "PATCH",
+                headers: {
+                        "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                        status: "open",
+                }),
+            },
+        );
+
+        expect(response.status).toBe(200);
+
+        const body =
+            await readJson<IncidentResponse>(response);
+
+        expect(body.data).toMatchObject({
+                id: incidentId,
+                status: "open",
+        });
+    });
+    
+	it("rejects an invalid incident status update", async () => {
+        const response = await exports.default.fetch(
+            "http://example.com/api/incidents/test-id",
+            {
+                method: "PATCH",
+                headers: {
+                        "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                        status: "pending",
+                }),
+        	},
+        );
+
+        expect(response.status).toBe(400);
+
+        const body = await readJson<ErrorResponse>(response);
+
+        expect(body.error).toBe(
+            "status must be open or resolved",
+        );
+    });
+    
+	it("rejects an incident update without a status", async () => {
+        const response = await exports.default.fetch(
+            "http://example.com/api/incidents/test-id",
+            {
+                method: "PATCH",
+                headers: {
+                        "Content-Type": "application/json",
+                },
+                body: JSON.stringify({}),
+            },
+        );
+
+        expect(response.status).toBe(400);
+
+        const body = await readJson<ErrorResponse>(response);
+
+        expect(body.error).toBe(
+            "status must be open or resolved",
+        );
+    });
+    
+	it("rejects invalid JSON in an incident update", async () => {
+        const response = await exports.default.fetch(
+            "http://example.com/api/incidents/test-id",
+            {
+                method: "PATCH",
+                headers: {
+                        "Content-Type": "application/json",
+                },
+                body: "{",
+            },
+        );
+
+        expect(response.status).toBe(400);
+
+        const body = await readJson<ErrorResponse>(response);
+
+        expect(body.error).toBe("Invalid JSON body");
+    });
+    
+	it("returns 404 when the incident does not exist", async () => {
+        const response = await exports.default.fetch(
+            "http://example.com/api/incidents/non-existent-id",
+            {
+                method: "PATCH",
+                headers: {
+                        "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                        status: "resolved",
+                }),
+            },
+        );
+
+        expect(response.status).toBe(404);
+
+        const body = await readJson<ErrorResponse>(response);
+
+        expect(body.error).toBe("Incident not found");
     });
 	
 	it("rate limits repeated event-ingestion requests", async () => {
