@@ -5,8 +5,11 @@ import {
 } from "./events";
 import { detectAnomaly } from "./anomaly";
 import {
-	createIncident,
-	getEventForAnalysis,
+    createIncident,
+    getEventForAnalysis,
+    listIncidents,
+    type IncidentSeverity,
+    type IncidentStatus,
 } from "./incidents";
 import {
 	writeEventTelemetry,
@@ -34,6 +37,22 @@ function isEventReceivedMessage(
 		typeof candidate.eventId === "string" &&
 		candidate.eventId.length > 0
 	);
+}
+
+function isIncidentSeverity(
+        value: string,
+): value is IncidentSeverity {
+        return (
+        value === "medium" ||
+        value === "high" ||
+        value === "critical"
+        );
+}
+
+function isIncidentStatus(
+    value: string,
+): value is IncidentStatus {
+    return value === "open" || value === "resolved";
 }
 
 export default {
@@ -159,6 +178,88 @@ export default {
 				);
 			}
 		}
+
+        // List incidents with optional filters
+        if (method === "GET" && path === "/api/incidents") {
+            const limitParam =
+                    url.searchParams.get("limit") ?? "20";
+            const limit = Number(limitParam);
+
+            if (
+                !Number.isInteger(limit) ||
+                limit < 1 ||
+                limit > 100
+            ) {
+                return Response.json(
+                    {
+                        error:
+                            "limit must be an integer between 1 and 100",
+                    },
+                    { status: 400 },
+                );
+            }
+
+            const severityParam =
+                        url.searchParams.get("severity");
+
+            if (
+                severityParam !== null &&
+                !isIncidentSeverity(severityParam)
+            ) {
+                return Response.json(
+                    {
+                        error:
+                            "severity must be medium, high, or critical",
+                    },
+	                { status: 400 },
+                );
+            }
+
+            const statusParam =
+                    url.searchParams.get("status");
+
+        	if (
+            	statusParam !== null &&
+                !isIncidentStatus(statusParam)
+            ) {
+                return Response.json(
+                    {
+                        error:
+                            "status must be open or resolved",
+                    },
+                    { status: 400 },
+                );
+            }
+
+            try {
+                const incidents = await listIncidents(
+                    env.edgeguard_db,
+                    {
+                        limit,
+                        severity:
+                        	severityParam ?? undefined,
+                        status:
+                            statusParam ?? undefined,
+                    },
+                );
+
+                return Response.json({
+                    data: incidents,
+                });
+            } catch (error) {
+                console.error(
+                    "Failed to fetch incidents:",
+                    error,
+                );
+
+                return Response.json(
+                    {
+                        error: "Failed to fetch incidents",
+                    },
+                	{ status: 500 },
+                );
+            }
+        }
 
 		// Ingest a new event
 		if (method === "POST" && path === "/api/events") {

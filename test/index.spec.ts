@@ -28,6 +28,24 @@ interface EventListResponse {
 	data: Event[];
 }
 
+interface Incident {
+    id: string;
+    eventId: string;
+    severity: "medium" | "high" | "critical";
+    reason: string;
+    status: "open" | "resolved";
+	createdAt: number;
+    eventMethod: string;
+    eventPath: string;
+    eventStatus: number;
+    eventLatencyMs: number;
+    eventOccurredAt: number;
+}
+
+interface IncidentListResponse {
+        data: Incident[];
+}
+
 interface ErrorResponse {
 	error: string;
 }
@@ -37,6 +55,49 @@ async function readJson<T>(
 ): Promise<T> {
 	return (await response.json()) as T;
 }
+
+interface TestIncidentInput {
+    severity: "medium" | "high" | "critical";
+    status: "open" | "resolved";
+    path: string;
+    eventStatus: number;
+    latencyMs: number;
+    createdAt: number;
+}
+
+async function seedIncident(
+    input: TestIncidentInput,
+): Promise<void> {
+    const event = await insertEvent(env.edgeguard_db, {
+        method: "GET",
+        path: input.path,
+        status: input.eventStatus,
+        latencyMs: input.latencyMs,
+    });
+
+    await env.edgeguard_db
+        .prepare(`
+            INSERT INTO incidents (
+				id,
+				event_id,
+				severity,
+				reason,
+				status,
+				created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+        `)
+        .bind(
+            crypto.randomUUID(),
+	        event.id,
+            input.severity,
+            `Test ${input.severity} incident`,
+            input.status,
+            input.createdAt,
+        )
+        .run();
+}
+
 
 describe("EdgeGuard Worker", () => {
 	beforeEach(async () => {
@@ -243,6 +304,191 @@ describe("EdgeGuard Worker", () => {
 		});
 	});
 
+
+    it("lists incidents with their related event data", async () => {
+            await seedIncident({
+                    severity: "high",
+                    status: "open",
+                    path: "/api/products",
+                    eventStatus: 500,
+                    latencyMs: 892,
+                    createdAt: 1000,
+            });
+
+            const response = await exports.default.fetch(
+                    "http://example.com/api/incidents",
+            );
+
+            expect(response.status).toBe(200);
+
+            const body =
+                    await readJson<IncidentListResponse>(response);
+
+            expect(body.data).toHaveLength(1);
+            expect(body.data[0]).toMatchObject({
+                    severity: "high",
+                    reason: "Test high incident",
+                    status: "open",
+                    createdAt: 1000,
+                    eventMethod: "GET",
+                    eventPath: "/api/products",
+                    eventStatus: 500,
+                    eventLatencyMs: 892,
+            });
+
+            expect(typeof body.data[0].id).toBe("string");
+            expect(typeof body.data[0].eventId).toBe("string");
+    });
+
+    it("filters incidents by severity and status", async () => {
+	        await seedIncident({
+                    severity: "high",
+                    status: "open",
+                    path: "/api/high",
+                    eventStatus: 500,
+                    latencyMs: 100,
+                    createdAt: 1000,
+            });
+
+            await seedIncident({
+                    severity: "critical",
+                    status: "open",
+                    path: "/api/critical",
+                    eventStatus: 500,
+                    latencyMs: 6000,
+                    createdAt: 2000,
+            });
+
+            await seedIncident({
+                    severity: "medium",
+                    status: "resolved",
+                    path: "/api/slow",
+                    eventStatus: 200,
+                    latencyMs: 2500,
+                    createdAt: 3000,
+            });
+
+            const severityResponse = await exports.default.fetch(
+                    "http://example.com/api/incidents?severity=critical",
+            );
+
+            const severityBody =
+                    await readJson<IncidentListResponse>(severityResponse);
+
+            expect(severityResponse.status).toBe(200);
+            expect(severityBody.data).toHaveLength(1);
+            expect(severityBody.data[0].severity).toBe("critical");
+
+            const statusResponse = await exports.default.fetch(
+                    "http://example.com/api/incidents?status=resolved",
+            );
+
+            const statusBody =
+                    await readJson<IncidentListResponse>(statusResponse);
+
+            expect(statusResponse.status).toBe(200);
+            expect(statusBody.data).toHaveLength(1);
+            expect(statusBody.data[0].status).toBe("resolved");
+
+            const combinedResponse = await exports.default.fetch(
+                    "http://example.com/api/incidents?severity=high&status=open",
+            );
+
+            const combinedBody =
+                    await readJson<IncidentListResponse>(combinedResponse);
+
+            expect(combinedResponse.status).toBe(200);
+            expect(combinedBody.data).toHaveLength(1);
+            expect(combinedBody.data[0]).toMatchObject({
+                    severity: "high",
+                    status: "open",
+            });
+    });
+
+    it("orders incidents by creation time and respects the limit", async () => {
+            await seedIncident({
+                    severity: "high",
+                    status: "open",
+                    path: "/api/oldest",
+                    eventStatus: 500,
+                    latencyMs: 100,
+                    createdAt: 100,
+            });
+
+            await seedIncident({
+                    severity: "critical",
+                    status: "open",
+                    path: "/api/newest",
+                    eventStatus: 500,
+                    latencyMs: 6000,
+                    createdAt: 300,
+            });
+
+            await seedIncident({
+                    severity: "medium",
+                    status: "open",
+                    path: "/api/middle",
+                    eventStatus: 200,
+                    latencyMs: 2500,
+                    createdAt: 200,
+            });
+
+            const response = await exports.default.fetch(
+                    "http://example.com/api/incidents?limit=2",
+            );
+
+            const body =
+                    await readJson<IncidentListResponse>(response);
+
+            expect(response.status).toBe(200);
+            expect(body.data).toHaveLength(2);
+            expect(body.data.map((incident) => incident.eventPath)).toEqual([
+                    "/api/newest",
+                    "/api/middle",
+            ]);
+    });
+
+    it("rejects an invalid incident severity", async () => {
+            const response = await exports.default.fetch(
+                    "http://example.com/api/incidents?severity=urgent",
+            );
+
+            expect(response.status).toBe(400);
+
+            const body = await readJson<ErrorResponse>(response);
+
+            expect(body.error).toBe(
+                    "severity must be medium, high, or critical",
+            );
+    });
+
+    it("rejects an invalid incident status", async () => {
+            const response = await exports.default.fetch(
+                    "http://example.com/api/incidents?status=pending",
+            );
+
+            expect(response.status).toBe(400);
+
+            const body = await readJson<ErrorResponse>(response);
+
+            expect(body.error).toBe(
+                    "status must be open or resolved",
+            );
+    });
+
+    it("rejects an invalid incident limit", async () => {
+            const response = await exports.default.fetch(
+ 	               "http://example.com/api/incidents?limit=101",
+            );
+
+            expect(response.status).toBe(400);
+
+            const body = await readJson<ErrorResponse>(response);
+
+            expect(body.error).toBe(
+                    "limit must be an integer between 1 and 100",
+            );
+    });
 	
 	it("rate limits repeated event-ingestion requests", async () => {
 		const responses: Array<{
