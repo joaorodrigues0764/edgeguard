@@ -71,6 +71,20 @@ interface DashboardMetricsResponse {
     };
 }
 
+interface DashboardTimeSeriesResponse {
+    data: {
+        interval: "hour";
+        hours: number;
+        points: Array<{
+            timestamp: number;
+            total: number;
+            serverErrors: number;
+            rateLimitedResponses: number;
+            averageLatencyMs: number;
+        }>;
+    };
+}
+
 interface ErrorResponse {
     error: string;
 }
@@ -765,6 +779,118 @@ describe("EdgeGuard Worker", () => {
                 },
             },
         });
+    });
+
+    it("returns empty hourly buckets when there are no events", async () => {
+        const response = await exports.default.fetch(
+            "http://example.com/api/metrics/timeseries?hours=3",
+        );
+
+        expect(response.status).toBe(200);
+
+        const body =
+            await readJson<DashboardTimeSeriesResponse>(response);
+
+        expect(body.data.interval).toBe("hour");
+        expect(body.data.hours).toBe(3);
+        expect(body.data.points).toHaveLength(3);
+
+        for (const point of body.data.points) {
+            expect(point.timestamp % 3_600_000).toBe(0);
+            expect(point.total).toBe(0);
+            expect(point.serverErrors).toBe(0);
+            expect(point.rateLimitedResponses).toBe(0);
+            expect(point.averageLatencyMs).toBe(0);
+        }
+
+        for (let i = 1; i < body.data.points.length; i++) {
+            expect(
+                body.data.points[i].timestamp -
+                body.data.points[i - 1].timestamp,
+            ).toBe(3_600_000);
+        }
+    });
+
+    it("aggregates event metrics into hourly buckets", async () => {
+        const hourMs = 3_600_000;
+        const oldOccurredAt = Date.now() - 2 * hourMs;
+
+        const oldEvent = await insertEvent(env.edgeguard_db, {
+            method: "GET",
+            path: "/api/products",
+            status: 500,
+            latencyMs: 300,
+        });
+
+        await env.edgeguard_db
+            .prepare(
+                "UPDATE events SET occurred_at = ? WHERE id = ?",
+            )
+            .bind(oldOccurredAt, oldEvent.id)
+            .run();
+
+        const recentEvent = await insertEvent(env.edgeguard_db, {
+            method: "POST",
+            path: "/api/login",
+            status: 429,
+            latencyMs: 100,
+        });
+
+        const response = await exports.default.fetch(
+            "http://example.com/api/metrics/timeseries?hours=4",
+        );
+
+        expect(response.status).toBe(200);
+
+        const body =
+            await readJson<DashboardTimeSeriesResponse>(response);
+
+        expect(body.data.points).toHaveLength(4);
+
+        const oldBucketTimestamp =
+            Math.floor(oldOccurredAt / hourMs) * hourMs;
+
+        const recentBucketTimestamp =
+            Math.floor(recentEvent.occurredAt / hourMs) * hourMs;
+
+        const oldBucket = body.data.points.find(
+            (point) => point.timestamp === oldBucketTimestamp,
+        );
+
+        const recentBucket = body.data.points.find(
+            (point) => point.timestamp === recentBucketTimestamp,
+        );
+
+        expect(oldBucket).toMatchObject({
+            total: 1,
+            serverErrors: 1,
+            rateLimitedResponses: 0,
+            averageLatencyMs: 300,
+        });
+
+        expect(recentBucket).toMatchObject({
+            total: 1,
+            serverErrors: 0,
+            rateLimitedResponses: 1,
+            averageLatencyMs: 100,
+        });
+    });
+
+    it("rejects invalid time-series hour ranges", async () => {
+        for (const hours of ["0", "169", "abc", "1.5"]) {
+            const response = await exports.default.fetch(
+                `http://example.com/api/metrics/timeseries?hours=${hours}`,
+            );
+
+            expect(response.status).toBe(400);
+
+            const body =
+                await readJson<ErrorResponse>(response);
+
+            expect(body.error).toBe(
+                "hours must be an integer between 1 and 168",
+            );
+        }
     });
 
     it("rate limits repeated event-ingestion requests", async () => {
