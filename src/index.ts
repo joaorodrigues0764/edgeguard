@@ -16,6 +16,7 @@ import {
 	writeEventTelemetry,
 	writeRateLimitedTelemetry,
 } from "./telemetry";
+import { getDashboardMetrics } from "./metrics";
 
 export interface Env {
 	edgeguard_db: D1Database;
@@ -129,6 +130,32 @@ export default {
 				timestamp: new Date().toISOString(),
 			});
 		}
+
+        // Dashboard metrics
+        if (method === "GET" && path === "/api/metrics") {
+            try {
+                const metrics = await getDashboardMetrics(
+                    env.edgeguard_db,
+                );
+
+                return Response.json({
+                    data: metrics,
+                });
+            } catch (error) {
+                    console.error(
+                        "Failed to fetch dashboard metrics:",
+                        error,
+                    );
+
+                    return Response.json(
+                        {
+                            error:
+                                "Failed to fetch dashboard metrics",
+                        },
+                        { status: 500 },
+                    );
+            }
+        }
 
 		// List stored events
 		if (method === "GET" && path === "/api/events") {
@@ -261,7 +288,7 @@ export default {
                 );
             }
         }
-                
+
 		// Update an incident's status
         const incidentPathMatch = path.match(
                 /^\/api\/incidents\/([^/]+)$/,

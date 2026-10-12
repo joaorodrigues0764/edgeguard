@@ -1,8 +1,8 @@
 import { env, exports } from "cloudflare:workers";
 import {
-	createExecutionContext,
-	createMessageBatch,
-	getQueueResult,
+    createExecutionContext,
+    createMessageBatch,
+    getQueueResult,
 } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
 import worker from "../src/index";
@@ -10,22 +10,22 @@ import { detectAnomaly } from "../src/anomaly";
 import { insertEvent } from "../src/events";
 
 interface Event {
-	id: string;
-	occurredAt: number;
-	method: string;
-	path: string;
-	status: number;
-	latencyMs: number;
-	clientId: string | null;
-	createdAt: number;
+    id: string;
+    occurredAt: number;
+    method: string;
+    path: string;
+    status: number;
+    latencyMs: number;
+    clientId: string | null;
+    createdAt: number;
 }
 
 interface EventResponse {
-	data: Event;
+    data: Event;
 }
 
 interface EventListResponse {
-	data: Event[];
+    data: Event[];
 }
 
 interface Incident {
@@ -34,7 +34,7 @@ interface Incident {
     severity: "medium" | "high" | "critical";
     reason: string;
     status: "open" | "resolved";
-	createdAt: number;
+    createdAt: number;
     eventMethod: string;
     eventPath: string;
     eventStatus: number;
@@ -50,14 +50,35 @@ interface IncidentResponse {
         data: Incident;
 }
 
+interface DashboardMetricsResponse {
+    data: {
+        events: {
+            total: number;
+            serverErrors: number;
+            rateLimitedResponses: number;
+            averageLatencyMs: number;
+        };
+        incidents: {
+            total: number;
+            open: number;
+            resolved: number;
+            bySeverity: {
+                medium: number;
+                high: number;
+                critical: number;
+            };
+        };
+    };
+}
+
 interface ErrorResponse {
-	error: string;
+    error: string;
 }
 
 async function readJson<T>(
-	response: Response,
+    response: Response,
 ): Promise<T> {
-	return (await response.json()) as T;
+    return (await response.json()) as T;
 }
 
 interface TestIncidentInput {
@@ -107,209 +128,209 @@ async function seedIncident(
 }
 
 describe("EdgeGuard Worker", () => {
-	beforeEach(async () => {
-		await env.edgeguard_db
-			.prepare("DELETE FROM incidents")
-			.run();
+    beforeEach(async () => {
+        await env.edgeguard_db
+            .prepare("DELETE FROM incidents")
+            .run();
 
-		await env.edgeguard_db
-			.prepare("DELETE FROM events")
-			.run();
-	});
+        await env.edgeguard_db
+            .prepare("DELETE FROM events")
+            .run();
+    });
 
-	it("responds to the health check", async () => {
-		const response = await exports.default.fetch(
-			"http://example.com/health",
-		);
+    it("responds to the health check", async () => {
+        const response = await exports.default.fetch(
+            "http://example.com/health",
+        );
 
-		expect(response.status).toBe(200);
+        expect(response.status).toBe(200);
 
-		const body = await readJson<{
-			status: string;
-			timestamp: string;
-		}>(response);
+        const body = await readJson<{
+            status: string;
+            timestamp: string;
+        }>(response);
 
-		expect(body.status).toBe("ok");
-		expect(typeof body.timestamp).toBe("string");
-	});
+        expect(body.status).toBe("ok");
+        expect(typeof body.timestamp).toBe("string");
+    });
 
-	it("returns a list of stored events", async () => {
-		const response = await exports.default.fetch(
-			"http://example.com/api/events",
-		);
+    it("returns a list of stored events", async () => {
+        const response = await exports.default.fetch(
+            "http://example.com/api/events",
+        );
 
-		expect(response.status).toBe(200);
+        expect(response.status).toBe(200);
 
-		const body =
-			await readJson<EventListResponse>(response);
+        const body =
+            await readJson<EventListResponse>(response);
 
-		expect(body.data).toEqual([]);
-	});
+        expect(body.data).toEqual([]);
+    });
 
-	it("creates and stores an event", async () => {
-		const request = new Request(
-			"http://example.com/api/events",
-			{
-				method: "POST",
-				headers: {
-					"Content-Type": "application/json",
-				},
-				body: JSON.stringify({
-					method: "GET",
-					path: "/api/products",
-					status: 500,
-					latencyMs: 892,
-					clientId: "test-client",
-				}),
-			},
-		);
+    it("creates and stores an event", async () => {
+        const request = new Request(
+            "http://example.com/api/events",
+            {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                    method: "GET",
+                    path: "/api/products",
+                    status: 500,
+                    latencyMs: 892,
+                    clientId: "test-client",
+                }),
+            },
+        );
 
-		const response =
-			await exports.default.fetch(request);
+        const response =
+            await exports.default.fetch(request);
 
-		expect(response.status).toBe(201);
+        expect(response.status).toBe(201);
 
-		const body =
-			await readJson<EventResponse>(response);
+        const body =
+            await readJson<EventResponse>(response);
 
-		expect(body.data).toMatchObject({
-			method: "GET",
-			path: "/api/products",
-			status: 500,
-			latencyMs: 892,
-			clientId: "test-client",
-		});
+        expect(body.data).toMatchObject({
+            method: "GET",
+            path: "/api/products",
+            status: 500,
+            latencyMs: 892,
+            clientId: "test-client",
+        });
 
-		expect(typeof body.data.id).toBe("string");
-		expect(typeof body.data.occurredAt).toBe("number");
-		expect(typeof body.data.createdAt).toBe("number");
+        expect(typeof body.data.id).toBe("string");
+        expect(typeof body.data.occurredAt).toBe("number");
+        expect(typeof body.data.createdAt).toBe("number");
 
-		const storedEvent = await env.edgeguard_db
-			.prepare(
-				"SELECT * FROM events WHERE id = ?",
-			)
-			.bind(body.data.id)
-			.first();
+        const storedEvent = await env.edgeguard_db
+            .prepare(
+                "SELECT * FROM events WHERE id = ?",
+            )
+            .bind(body.data.id)
+            .first();
 
-		expect(storedEvent).toMatchObject({
-			id: body.data.id,
-			method: "GET",
-			path: "/api/products",
-			status: 500,
-			client_id: "test-client",
-		});
+        expect(storedEvent).toMatchObject({
+            id: body.data.id,
+            method: "GET",
+            path: "/api/products",
+            status: 500,
+            client_id: "test-client",
+        });
 
-		expect(storedEvent?.latency_ms).toBe(892);
-	});
+        expect(storedEvent?.latency_ms).toBe(892);
+    });
 
-	it("rejects invalid JSON", async () => {
-		const request = new Request(
-			"http://example.com/api/events",
-			{
-				method: "POST",
-				headers: {
-					"Content-Type": "application/json",
-				},
-				body: "{",
-			},
-		);
+    it("rejects invalid JSON", async () => {
+        const request = new Request(
+            "http://example.com/api/events",
+            {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                },
+                body: "{",
+            },
+        );
 
-		const response =
-			await exports.default.fetch(request);
+        const response =
+            await exports.default.fetch(request);
 
-		expect(response.status).toBe(400);
+        expect(response.status).toBe(400);
 
-		const body =
-			await readJson<ErrorResponse>(response);
+        const body =
+            await readJson<ErrorResponse>(response);
 
-		expect(body).toEqual({
-			error: "Invalid JSON body",
-		});
-	});
+        expect(body).toEqual({
+            error: "Invalid JSON body",
+        });
+    });
 
-	it("rejects an invalid event payload", async () => {
-		const request = new Request(
-			"http://example.com/api/events",
-			{
-				method: "POST",
-				headers: {
-					"Content-Type": "application/json",
-				},
-				body: JSON.stringify({
-					method: "INVALID",
-					path: "/api/test",
-					status: 200,
-					latencyMs: 100,
-				}),
-			},
-		);
+    it("rejects an invalid event payload", async () => {
+        const request = new Request(
+            "http://example.com/api/events",
+            {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                    method: "INVALID",
+                    path: "/api/test",
+                    status: 200,
+                    latencyMs: 100,
+                }),
+            },
+        );
 
-		const response =
-			await exports.default.fetch(request);
+        const response =
+            await exports.default.fetch(request);
 
-		expect(response.status).toBe(400);
+        expect(response.status).toBe(400);
 
-		const body =
-			await readJson<ErrorResponse>(response);
+        const body =
+            await readJson<ErrorResponse>(response);
 
-		expect(body).toEqual({
-			error: "Invalid event payload",
-		});
-	});
+        expect(body).toEqual({
+            error: "Invalid event payload",
+        });
+    });
 
-	it("lists stored events", async () => {
-		const request = new Request(
-			"http://example.com/api/events",
-			{
-				method: "POST",
-				headers: {
-					"Content-Type": "application/json",
-				},
-				body: JSON.stringify({
-					method: "POST",
-					path: "/api/login",
-					status: 200,
-					latencyMs: 120,
-				}),
-			},
-		);
+    it("lists stored events", async () => {
+        const request = new Request(
+            "http://example.com/api/events",
+            {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                    method: "POST",
+                    path: "/api/login",
+                    status: 200,
+                    latencyMs: 120,
+                }),
+            },
+        );
 
-		await exports.default.fetch(request);
+        await exports.default.fetch(request);
 
-		const response = await exports.default.fetch(
-			"http://example.com/api/events?limit=10",
-		);
+        const response = await exports.default.fetch(
+            "http://example.com/api/events?limit=10",
+        );
 
-		expect(response.status).toBe(200);
+        expect(response.status).toBe(200);
 
-		const body =
-			await readJson<EventListResponse>(response);
+        const body =
+            await readJson<EventListResponse>(response);
 
-		expect(body.data).toHaveLength(1);
+        expect(body.data).toHaveLength(1);
 
-		expect(body.data[0]).toMatchObject({
-			method: "POST",
-			path: "/api/login",
-			status: 200,
-			latencyMs: 120,
-		});
-	});
+        expect(body.data[0]).toMatchObject({
+            method: "POST",
+            path: "/api/login",
+            status: 200,
+            latencyMs: 120,
+        });
+    });
 
-	it("rejects an invalid limit", async () => {
-		const response = await exports.default.fetch(
-			"http://example.com/api/events?limit=101",
-		);
+    it("rejects an invalid limit", async () => {
+        const response = await exports.default.fetch(
+            "http://example.com/api/events?limit=101",
+        );
 
-		expect(response.status).toBe(400);
+        expect(response.status).toBe(400);
 
-		const body =
-			await readJson<ErrorResponse>(response);
+        const body =
+            await readJson<ErrorResponse>(response);
 
-		expect(body).toEqual({
-			error:
-				"limit must be an integer between 1 and 100",
-		});
-	});
+        expect(body).toEqual({
+            error:
+                "limit must be an integer between 1 and 100",
+        });
+    });
 
 
     it("lists incidents with their related event data", async () => {
@@ -348,7 +369,7 @@ describe("EdgeGuard Worker", () => {
     });
 
     it("filters incidents by severity and status", async () => {
-	        await seedIncident({
+            await seedIncident({
                     severity: "high",
                     status: "open",
                     path: "/api/high",
@@ -485,7 +506,7 @@ describe("EdgeGuard Worker", () => {
 
     it("rejects an invalid incident limit", async () => {
             const response = await exports.default.fetch(
- 	               "http://example.com/api/incidents?limit=101",
+                   "http://example.com/api/incidents?limit=101",
             );
 
             expect(response.status).toBe(400);
@@ -496,8 +517,8 @@ describe("EdgeGuard Worker", () => {
                     "limit must be an integer between 1 and 100",
             );
     });
-    
-	it("resolves an open incident", async () => {
+
+    it("resolves an open incident", async () => {
         const incidentId = await seedIncident({
             severity: "high",
             status: "open",
@@ -540,8 +561,8 @@ describe("EdgeGuard Worker", () => {
 
         expect(storedIncident?.status).toBe("resolved");
     });
-    
-	it("reopens a resolved incident", async () => {
+
+    it("reopens a resolved incident", async () => {
         const incidentId = await seedIncident({
             severity: "critical",
             status: "resolved",
@@ -574,8 +595,8 @@ describe("EdgeGuard Worker", () => {
                 status: "open",
         });
     });
-    
-	it("rejects an invalid incident status update", async () => {
+
+    it("rejects an invalid incident status update", async () => {
         const response = await exports.default.fetch(
             "http://example.com/api/incidents/test-id",
             {
@@ -586,7 +607,7 @@ describe("EdgeGuard Worker", () => {
                 body: JSON.stringify({
                         status: "pending",
                 }),
-        	},
+            },
         );
 
         expect(response.status).toBe(400);
@@ -597,8 +618,8 @@ describe("EdgeGuard Worker", () => {
             "status must be open or resolved",
         );
     });
-    
-	it("rejects an incident update without a status", async () => {
+
+    it("rejects an incident update without a status", async () => {
         const response = await exports.default.fetch(
             "http://example.com/api/incidents/test-id",
             {
@@ -618,8 +639,8 @@ describe("EdgeGuard Worker", () => {
             "status must be open or resolved",
         );
     });
-    
-	it("rejects invalid JSON in an incident update", async () => {
+
+    it("rejects invalid JSON in an incident update", async () => {
         const response = await exports.default.fetch(
             "http://example.com/api/incidents/test-id",
             {
@@ -637,8 +658,8 @@ describe("EdgeGuard Worker", () => {
 
         expect(body.error).toBe("Invalid JSON body");
     });
-    
-	it("returns 404 when the incident does not exist", async () => {
+
+    it("returns 404 when the incident does not exist", async () => {
         const response = await exports.default.fetch(
             "http://example.com/api/incidents/non-existent-id",
             {
@@ -658,254 +679,341 @@ describe("EdgeGuard Worker", () => {
 
         expect(body.error).toBe("Incident not found");
     });
-	
-	it("rate limits repeated event-ingestion requests", async () => {
-		const responses: Array<{
-			clientId: string;
-			response: Response;
-		}> = [];
 
-		for (let i = 0; i < 20; i++) {
-			const clientId = `rate-test-${i}`;
+    it("returns zeroed dashboard metrics when the database is empty", async () => {
+        const response = await exports.default.fetch(
+            "http://example.com/api/metrics",
+        );
 
-			const request = new Request(
-				"http://example.com/api/events",
-				{
-					method: "POST",
-					headers: {
-						"Content-Type": "application/json",
-						"cf-connecting-ip": "192.0.2.42",
-					},
-					body: JSON.stringify({
-						method: "GET",
-						path: "/api/products",
-						status: 200,
-						latencyMs: 25,
-						clientId,
-					}),
-				},
-			);
+        expect(response.status).toBe(200);
 
-			const response = await exports.default.fetch(request);
+        const body =
+            await readJson<DashboardMetricsResponse>(response);
 
-			responses.push({ clientId, response });
-		}
+        expect(body.data).toEqual({
+            events: {
+                total: 0,
+                serverErrors: 0,
+                rateLimitedResponses: 0,
+                averageLatencyMs: 0,
+            },
+            incidents: {
+                total: 0,
+                open: 0,
+                resolved: 0,
+                bySeverity: {
+                    medium: 0,
+                    high: 0,
+                    critical: 0,
+                },
+            },
+        });
+    });
 
-		const rejectedRequests = responses.filter(
-			({ response }) => response.status === 429,
-		);
+    it("calculates dashboard metrics from events and incidents", async () => {
+        await seedIncident({
+            severity: "medium",
+            status: "resolved",
+            path: "/api/slow",
+            eventStatus: 429,
+            latencyMs: 100,
+            createdAt: 1000,
+        });
 
-		expect(rejectedRequests.length).toBeGreaterThan(0);
+        await seedIncident({
+            severity: "high",
+            status: "open",
+            path: "/api/products",
+            eventStatus: 500,
+            latencyMs: 300,
+            createdAt: 2000,
+        });
 
-		for (const { clientId, response } of rejectedRequests) {
-			expect(await response.json()).toMatchObject({
-				error: "Rate limit exceeded",
-			});
+        await seedIncident({
+            severity: "critical",
+            status: "open",
+            path: "/api/checkout",
+            eventStatus: 503,
+            latencyMs: 500,
+            createdAt: 3000,
+        });
 
-			expect(response.headers.get("Retry-After")).toBe("10");
+        const response = await exports.default.fetch(
+            "http://example.com/api/metrics",
+        );
 
-			const storedEvent = await env.edgeguard_db
-				.prepare(
-					"SELECT id FROM events WHERE client_id = ?",
-				)
-				.bind(clientId)
-				.first();
+        expect(response.status).toBe(200);
 
-			expect(storedEvent).toBeNull();
-		}
+        const body =
+            await readJson<DashboardMetricsResponse>(response);
 
-		expect(
-			responses.every(({ response }) =>
-				response.status === 201 || response.status === 429
-			),
-		).toBe(true);
-	});
+        expect(body.data).toEqual({
+            events: {
+                total: 3,
+                serverErrors: 2,
+                rateLimitedResponses: 1,
+                averageLatencyMs: 300,
+            },
+            incidents: {
+                total: 3,
+                open: 2,
+                resolved: 1,
+                bySeverity: {
+                    medium: 1,
+                    high: 1,
+                    critical: 1,
+                },
+            },
+        });
+    });
+
+    it("rate limits repeated event-ingestion requests", async () => {
+        const responses: Array<{
+            clientId: string;
+            response: Response;
+        }> = [];
+
+        for (let i = 0; i < 20; i++) {
+            const clientId = `rate-test-${i}`;
+
+            const request = new Request(
+                "http://example.com/api/events",
+                {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                        "cf-connecting-ip": "192.0.2.42",
+                    },
+                    body: JSON.stringify({
+                        method: "GET",
+                        path: "/api/products",
+                        status: 200,
+                        latencyMs: 25,
+                        clientId,
+                    }),
+                },
+            );
+
+            const response = await exports.default.fetch(request);
+
+            responses.push({ clientId, response });
+        }
+
+        const rejectedRequests = responses.filter(
+            ({ response }) => response.status === 429,
+        );
+
+        expect(rejectedRequests.length).toBeGreaterThan(0);
+
+        for (const { clientId, response } of rejectedRequests) {
+            expect(await response.json()).toMatchObject({
+                error: "Rate limit exceeded",
+            });
+
+            expect(response.headers.get("Retry-After")).toBe("10");
+
+            const storedEvent = await env.edgeguard_db
+                .prepare(
+                    "SELECT id FROM events WHERE client_id = ?",
+                )
+                .bind(clientId)
+                .first();
+
+            expect(storedEvent).toBeNull();
+        }
+
+        expect(
+            responses.every(({ response }) =>
+                response.status === 201 || response.status === 429
+            ),
+        ).toBe(true);
+    });
 });
 
 describe("Anomaly detection", () => {
-	it("does not flag a normal event", () => {
-		expect(
-			detectAnomaly({
-				status: 200,
-				latencyMs: 100,
-			}),
-		).toBeNull();
-	});
+    it("does not flag a normal event", () => {
+        expect(
+            detectAnomaly({
+                status: 200,
+                latencyMs: 100,
+            }),
+        ).toBeNull();
+    });
 
-	it("detects server errors", () => {
-		expect(
-			detectAnomaly({
-				status: 500,
-				latencyMs: 892,
-			}),
-		).toEqual({
-			severity: "high",
-			reason: "Server returned a 5xx response",
-		});
-	});
+    it("detects server errors", () => {
+        expect(
+            detectAnomaly({
+                status: 500,
+                latencyMs: 892,
+            }),
+        ).toEqual({
+            severity: "high",
+            reason: "Server returned a 5xx response",
+        });
+    });
 
-	it("detects rate-limited requests", () => {
-		expect(
-			detectAnomaly({
-				status: 429,
-				latencyMs: 100,
-			}),
-		).toEqual({
-			severity: "medium",
-			reason: "Request was rate limited",
-		});
-	});
+    it("detects rate-limited requests", () => {
+        expect(
+            detectAnomaly({
+                status: 429,
+                latencyMs: 100,
+            }),
+        ).toEqual({
+            severity: "medium",
+            reason: "Request was rate limited",
+        });
+    });
 
-	it("detects high latency", () => {
-		expect(
-			detectAnomaly({
-				status: 200,
-				latencyMs: 2500,
-			}),
-		).toEqual({
-			severity: "medium",
-			reason:
-				"Request latency exceeded the anomaly threshold",
-		});
-	});
+    it("detects high latency", () => {
+        expect(
+            detectAnomaly({
+                status: 200,
+                latencyMs: 2500,
+            }),
+        ).toEqual({
+            severity: "medium",
+            reason:
+                "Request latency exceeded the anomaly threshold",
+        });
+    });
 
-	it("classifies slow server errors as critical", () => {
-		expect(
-			detectAnomaly({
-				status: 500,
-				latencyMs: 7000,
-			}),
-		).toEqual({
-			severity: "critical",
-			reason:
-				"Server error combined with very high latency",
-		});
-	});
+    it("classifies slow server errors as critical", () => {
+        expect(
+            detectAnomaly({
+                status: 500,
+                latencyMs: 7000,
+            }),
+        ).toEqual({
+            severity: "critical",
+            reason:
+                "Server error combined with very high latency",
+        });
+    });
 });
 
 async function processQueueMessage(
-	eventId: string,
-	messageId: string,
-	attempts = 1,
+    eventId: string,
+    messageId: string,
+    attempts = 1,
 ) {
-	const batch = createMessageBatch("edgeguard-events", [
-		{
-			id: messageId,
-			timestamp: new Date(1000),
-			attempts,
-			body: {
-				type: "event.received",
-				eventId,
-			},
-		},
-	]);
+    const batch = createMessageBatch("edgeguard-events", [
+        {
+            id: messageId,
+            timestamp: new Date(1000),
+            attempts,
+            body: {
+                type: "event.received",
+                eventId,
+            },
+        },
+    ]);
 
-	const context = createExecutionContext();
-	await worker.queue(batch, env, context);
+    const context = createExecutionContext();
+    await worker.queue(batch, env, context);
 
-	return getQueueResult(batch, context);
+    return getQueueResult(batch, context);
 }
 
 describe("Queue consumer", () => {
-	beforeEach(async () => {
-		await env.edgeguard_db
-			.prepare("DELETE FROM incidents")
-			.run();
+    beforeEach(async () => {
+        await env.edgeguard_db
+            .prepare("DELETE FROM incidents")
+            .run();
 
-		await env.edgeguard_db
-			.prepare("DELETE FROM events")
-			.run();
-	});
+        await env.edgeguard_db
+            .prepare("DELETE FROM events")
+            .run();
+    });
 
-	it("creates a high-severity incident for a server error", async () => {
-		const event = await insertEvent(env.edgeguard_db, {
-			method: "GET",
-			path: "/api/products",
-			status: 500,
-			latencyMs: 892,
-			clientId: "test-client",
-		});
+    it("creates a high-severity incident for a server error", async () => {
+        const event = await insertEvent(env.edgeguard_db, {
+            method: "GET",
+            path: "/api/products",
+            status: 500,
+            latencyMs: 892,
+            clientId: "test-client",
+        });
 
-		const result = await processQueueMessage(
-			event.id,
-			"high-incident-message",
-		);
+        const result = await processQueueMessage(
+            event.id,
+            "high-incident-message",
+        );
 
-		expect(result.explicitAcks).toStrictEqual([
-			"high-incident-message",
-		]);
+        expect(result.explicitAcks).toStrictEqual([
+            "high-incident-message",
+        ]);
 
-		const incident = await env.edgeguard_db
-			.prepare(`
-				SELECT event_id, severity, reason, status
-				FROM incidents
-				WHERE event_id = ?
-			`)
-			.bind(event.id)
-			.first();
+        const incident = await env.edgeguard_db
+            .prepare(`
+                SELECT event_id, severity, reason, status
+                FROM incidents
+                WHERE event_id = ?
+            `)
+            .bind(event.id)
+            .first();
 
-		expect(incident).toMatchObject({
-			event_id: event.id,
-			severity: "high",
-			reason: "Server returned a 5xx response",
-			status: "open",
-		});
-	});
+        expect(incident).toMatchObject({
+            event_id: event.id,
+            severity: "high",
+            reason: "Server returned a 5xx response",
+            status: "open",
+        });
+    });
 
-	it("does not create an incident for a normal event", async () => {
-		const event = await insertEvent(env.edgeguard_db, {
-			method: "GET",
-			path: "/api/products",
-			status: 200,
-			latencyMs: 100,
-		});
+    it("does not create an incident for a normal event", async () => {
+        const event = await insertEvent(env.edgeguard_db, {
+            method: "GET",
+            path: "/api/products",
+            status: 200,
+            latencyMs: 100,
+        });
 
-		const result = await processQueueMessage(
-			event.id,
-			"normal-event-message",
-		);
+        const result = await processQueueMessage(
+            event.id,
+            "normal-event-message",
+        );
 
-		expect(result.explicitAcks).toStrictEqual([
-			"normal-event-message",
-		]);
+        expect(result.explicitAcks).toStrictEqual([
+            "normal-event-message",
+        ]);
 
-		const incident = await env.edgeguard_db
-			.prepare(
-				"SELECT id FROM incidents WHERE event_id = ?",
-			)
-			.bind(event.id)
-			.first();
+        const incident = await env.edgeguard_db
+            .prepare(
+                "SELECT id FROM incidents WHERE event_id = ?",
+            )
+            .bind(event.id)
+            .first();
 
-		expect(incident).toBeNull();
-	});
+        expect(incident).toBeNull();
+    });
 
-	it("does not create duplicate incidents for a redelivered message", async () => {
-		const event = await insertEvent(env.edgeguard_db, {
-			method: "GET",
-			path: "/api/database",
-			status: 500,
-			latencyMs: 7000,
-		});
+    it("does not create duplicate incidents for a redelivered message", async () => {
+        const event = await insertEvent(env.edgeguard_db, {
+            method: "GET",
+            path: "/api/database",
+            status: 500,
+            latencyMs: 7000,
+        });
 
-		await processQueueMessage(
-			event.id,
-			"critical-message-first-delivery",
-		);
+        await processQueueMessage(
+            event.id,
+            "critical-message-first-delivery",
+        );
 
-		await processQueueMessage(
-			event.id,
-			"critical-message-redelivery",
-		);
+        await processQueueMessage(
+            event.id,
+            "critical-message-redelivery",
+        );
 
-		const result = await env.edgeguard_db
-			.prepare(`
-				SELECT COUNT(*) AS count
-				FROM incidents
-				WHERE event_id = ?
-			`)
-			.bind(event.id)
-			.first<{ count: number }>();
+        const result = await env.edgeguard_db
+            .prepare(`
+                SELECT COUNT(*) AS count
+                FROM incidents
+                WHERE event_id = ?
+            `)
+            .bind(event.id)
+            .first<{ count: number }>();
 
-		expect(result?.count).toBe(1);
-	});
+        expect(result?.count).toBe(1);
+    });
 });
