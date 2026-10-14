@@ -20,12 +20,16 @@ import {
     getDashboardMetrics,
     getDashboardTimeSeries,
 } from "./metrics";
+import { authorizeRequest, type ApiRole } from "./auth";
 
 export interface Env {
     edgeguard_db: D1Database;
     EVENTS_QUEUE: Queue<EventReceivedMessage>;
     EDGEGUARD_ANALYTICS: AnalyticsEngineDataset;
     EVENT_INGEST_RATE_LIMITER: RateLimit;
+    INGEST_API_TOKEN: string;
+    DASHBOARD_API_TOKEN: string;
+    ADMIN_API_TOKEN: string;
 }
 
 function isEventReceivedMessage(
@@ -132,6 +136,43 @@ export default {
                 status: "ok",
                 timestamp: new Date().toISOString(),
             });
+        }
+
+        // Protect API routes according to their required role.
+        let allowedRoles: readonly ApiRole[] | null = null;
+
+        if (
+            method === "POST" &&
+            path === "/api/events"
+        ) {
+            allowedRoles = ["ingest"];
+        } else if (
+            method === "GET" &&
+            [
+                "/api/events",
+                "/api/incidents",
+                "/api/metrics",
+                "/api/metrics/timeseries",
+            ].includes(path)
+        ) {
+            allowedRoles = ["dashboard", "admin"];
+        } else if (
+            method === "PATCH" &&
+            /^\/api\/incidents\/[^/]+$/.test(path)
+        ) {
+            allowedRoles = ["admin"];
+        }
+
+        if (allowedRoles !== null) {
+            const authResponse = authorizeRequest(
+                request,
+                env,
+                allowedRoles,
+            );
+
+            if (authResponse !== null) {
+                return authResponse;
+            }
         }
 
         // Dashboard time-series metrics

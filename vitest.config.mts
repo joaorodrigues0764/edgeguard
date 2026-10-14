@@ -15,6 +15,9 @@ export default defineConfig({
 				miniflare: {
 					bindings: {
 						TEST_MIGRATIONS: migrations,
+						INGEST_API_TOKEN: "test-ingest-token",
+						DASHBOARD_API_TOKEN: "test-dashboard-token",
+						ADMIN_API_TOKEN: "test-admin-token",
 					},
 				},
 			};

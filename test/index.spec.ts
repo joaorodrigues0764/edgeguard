@@ -95,6 +95,51 @@ async function readJson<T>(
     return (await response.json()) as T;
 }
 
+const rawWorkerFetch = exports.default.fetch.bind(exports.default);
+
+async function fetchTestRequest(
+    input: RequestInfo | URL,
+    init?: RequestInit,
+): Promise<Response> {
+    const request = new Request(input, init);
+    const url = new URL(request.url);
+
+    let token: string | undefined;
+
+    if (
+        request.method === "POST" &&
+        url.pathname === "/api/events"
+    ) {
+        token = env.INGEST_API_TOKEN;
+    } else if (
+        request.method === "PATCH" &&
+        /^\/api\/incidents\/[^/]+$/.test(url.pathname)
+    ) {
+        token = env.ADMIN_API_TOKEN;
+    } else if (
+        request.method === "GET" &&
+        [
+            "/api/events",
+            "/api/incidents",
+            "/api/metrics",
+            "/api/metrics/timeseries",
+        ].includes(url.pathname)
+    ) {
+        token = env.DASHBOARD_API_TOKEN;
+    }
+
+    if (!token || request.headers.has("Authorization")) {
+        return rawWorkerFetch(request);
+    }
+
+    const headers = new Headers(request.headers);
+    headers.set("Authorization", `Bearer ${token}`);
+
+    return rawWorkerFetch(
+        new Request(request, { headers }),
+    );
+}
+
 interface TestIncidentInput {
     severity: "medium" | "high" | "critical";
     status: "open" | "resolved";
@@ -153,7 +198,7 @@ describe("EdgeGuard Worker", () => {
     });
 
     it("responds to the health check", async () => {
-        const response = await exports.default.fetch(
+        const response = await fetchTestRequest(
             "http://example.com/health",
         );
 
@@ -169,7 +214,7 @@ describe("EdgeGuard Worker", () => {
     });
 
     it("returns a list of stored events", async () => {
-        const response = await exports.default.fetch(
+        const response = await fetchTestRequest(
             "http://example.com/api/events",
         );
 
@@ -200,7 +245,7 @@ describe("EdgeGuard Worker", () => {
         );
 
         const response =
-            await exports.default.fetch(request);
+            await fetchTestRequest(request);
 
         expect(response.status).toBe(201);
 
@@ -250,7 +295,7 @@ describe("EdgeGuard Worker", () => {
         );
 
         const response =
-            await exports.default.fetch(request);
+            await fetchTestRequest(request);
 
         expect(response.status).toBe(400);
 
@@ -280,7 +325,7 @@ describe("EdgeGuard Worker", () => {
         );
 
         const response =
-            await exports.default.fetch(request);
+            await fetchTestRequest(request);
 
         expect(response.status).toBe(400);
 
@@ -309,9 +354,9 @@ describe("EdgeGuard Worker", () => {
             },
         );
 
-        await exports.default.fetch(request);
+        await fetchTestRequest(request);
 
-        const response = await exports.default.fetch(
+        const response = await fetchTestRequest(
             "http://example.com/api/events?limit=10",
         );
 
@@ -331,7 +376,7 @@ describe("EdgeGuard Worker", () => {
     });
 
     it("rejects an invalid limit", async () => {
-        const response = await exports.default.fetch(
+        const response = await fetchTestRequest(
             "http://example.com/api/events?limit=101",
         );
 
@@ -357,7 +402,7 @@ describe("EdgeGuard Worker", () => {
                     createdAt: 1000,
             });
 
-            const response = await exports.default.fetch(
+            const response = await fetchTestRequest(
                     "http://example.com/api/incidents",
             );
 
@@ -410,7 +455,7 @@ describe("EdgeGuard Worker", () => {
                     createdAt: 3000,
             });
 
-            const severityResponse = await exports.default.fetch(
+            const severityResponse = await fetchTestRequest(
                     "http://example.com/api/incidents?severity=critical",
             );
 
@@ -421,7 +466,7 @@ describe("EdgeGuard Worker", () => {
             expect(severityBody.data).toHaveLength(1);
             expect(severityBody.data[0].severity).toBe("critical");
 
-            const statusResponse = await exports.default.fetch(
+            const statusResponse = await fetchTestRequest(
                     "http://example.com/api/incidents?status=resolved",
             );
 
@@ -432,7 +477,7 @@ describe("EdgeGuard Worker", () => {
             expect(statusBody.data).toHaveLength(1);
             expect(statusBody.data[0].status).toBe("resolved");
 
-            const combinedResponse = await exports.default.fetch(
+            const combinedResponse = await fetchTestRequest(
                     "http://example.com/api/incidents?severity=high&status=open",
             );
 
@@ -475,7 +520,7 @@ describe("EdgeGuard Worker", () => {
                     createdAt: 200,
             });
 
-            const response = await exports.default.fetch(
+            const response = await fetchTestRequest(
                     "http://example.com/api/incidents?limit=2",
             );
 
@@ -491,7 +536,7 @@ describe("EdgeGuard Worker", () => {
     });
 
     it("rejects an invalid incident severity", async () => {
-            const response = await exports.default.fetch(
+            const response = await fetchTestRequest(
                     "http://example.com/api/incidents?severity=urgent",
             );
 
@@ -505,7 +550,7 @@ describe("EdgeGuard Worker", () => {
     });
 
     it("rejects an invalid incident status", async () => {
-            const response = await exports.default.fetch(
+            const response = await fetchTestRequest(
                     "http://example.com/api/incidents?status=pending",
             );
 
@@ -519,7 +564,7 @@ describe("EdgeGuard Worker", () => {
     });
 
     it("rejects an invalid incident limit", async () => {
-            const response = await exports.default.fetch(
+            const response = await fetchTestRequest(
                    "http://example.com/api/incidents?limit=101",
             );
 
@@ -542,7 +587,7 @@ describe("EdgeGuard Worker", () => {
             createdAt: 1000,
         });
 
-        const response = await exports.default.fetch(
+        const response = await fetchTestRequest(
             `http://example.com/api/incidents/${incidentId}`,
             {
                 method: "PATCH",
@@ -586,7 +631,7 @@ describe("EdgeGuard Worker", () => {
             createdAt: 2000,
         });
 
-        const response = await exports.default.fetch(
+        const response = await fetchTestRequest(
             `http://example.com/api/incidents/${incidentId}`,
             {
                 method: "PATCH",
@@ -611,7 +656,7 @@ describe("EdgeGuard Worker", () => {
     });
 
     it("rejects an invalid incident status update", async () => {
-        const response = await exports.default.fetch(
+        const response = await fetchTestRequest(
             "http://example.com/api/incidents/test-id",
             {
                 method: "PATCH",
@@ -634,7 +679,7 @@ describe("EdgeGuard Worker", () => {
     });
 
     it("rejects an incident update without a status", async () => {
-        const response = await exports.default.fetch(
+        const response = await fetchTestRequest(
             "http://example.com/api/incidents/test-id",
             {
                 method: "PATCH",
@@ -655,7 +700,7 @@ describe("EdgeGuard Worker", () => {
     });
 
     it("rejects invalid JSON in an incident update", async () => {
-        const response = await exports.default.fetch(
+        const response = await fetchTestRequest(
             "http://example.com/api/incidents/test-id",
             {
                 method: "PATCH",
@@ -674,7 +719,7 @@ describe("EdgeGuard Worker", () => {
     });
 
     it("returns 404 when the incident does not exist", async () => {
-        const response = await exports.default.fetch(
+        const response = await fetchTestRequest(
             "http://example.com/api/incidents/non-existent-id",
             {
                 method: "PATCH",
@@ -695,7 +740,7 @@ describe("EdgeGuard Worker", () => {
     });
 
     it("returns zeroed dashboard metrics when the database is empty", async () => {
-        const response = await exports.default.fetch(
+        const response = await fetchTestRequest(
             "http://example.com/api/metrics",
         );
 
@@ -752,7 +797,7 @@ describe("EdgeGuard Worker", () => {
             createdAt: 3000,
         });
 
-        const response = await exports.default.fetch(
+        const response = await fetchTestRequest(
             "http://example.com/api/metrics",
         );
 
@@ -782,7 +827,7 @@ describe("EdgeGuard Worker", () => {
     });
 
     it("returns empty hourly buckets when there are no events", async () => {
-        const response = await exports.default.fetch(
+        const response = await fetchTestRequest(
             "http://example.com/api/metrics/timeseries?hours=3",
         );
 
@@ -836,7 +881,7 @@ describe("EdgeGuard Worker", () => {
             latencyMs: 100,
         });
 
-        const response = await exports.default.fetch(
+        const response = await fetchTestRequest(
             "http://example.com/api/metrics/timeseries?hours=4",
         );
 
@@ -878,7 +923,7 @@ describe("EdgeGuard Worker", () => {
 
     it("rejects invalid time-series hour ranges", async () => {
         for (const hours of ["0", "169", "abc", "1.5"]) {
-            const response = await exports.default.fetch(
+            const response = await fetchTestRequest(
                 `http://example.com/api/metrics/timeseries?hours=${hours}`,
             );
 
@@ -891,6 +936,150 @@ describe("EdgeGuard Worker", () => {
                 "hours must be an integer between 1 and 168",
             );
         }
+    });
+
+    it("rejects protected API requests without a token", async () => {
+        const requests: Request[] = [
+            new Request(
+                "http://example.com/api/events",
+            ),
+            new Request(
+                "http://example.com/api/incidents",
+            ),
+            new Request(
+                "http://example.com/api/metrics",
+            ),
+            new Request(
+                "http://example.com/api/metrics/timeseries",
+            ),
+            new Request(
+                "http://example.com/api/events",
+                {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                    },
+                    body: JSON.stringify({
+                        method: "GET",
+                        path: "/api/test",
+                        status: 200,
+                        latencyMs: 25,
+                    }),
+                },
+            ),
+            new Request(
+                "http://example.com/api/incidents/test-id",
+                {
+                    method: "PATCH",
+                    headers: {
+                        "Content-Type": "application/json",
+                    },
+                    body: JSON.stringify({
+                        status: "resolved",
+                    }),
+                },
+            ),
+        ];
+
+        for (const request of requests) {
+            const response = await rawWorkerFetch(request);
+
+            expect(response.status).toBe(401);
+            expect(
+                response.headers.get("WWW-Authenticate"),
+            ).toBe("Bearer");
+        }
+
+        const eventCount = await env.edgeguard_db
+            .prepare("SELECT COUNT(*) AS total FROM events")
+            .first<{ total: number }>();
+
+        expect(eventCount?.total).toBe(0);
+    });
+
+    it("rejects invalid tokens and non-Bearer authentication", async () => {
+        const authorizationHeaders = [
+            "Bearer invalid-test-token",
+            "Basic test-token",
+        ];
+
+        for (const authorization of authorizationHeaders) {
+            const request = new Request(
+                "http://example.com/api/metrics",
+                {
+                    headers: {
+                        Authorization: authorization,
+                    },
+                },
+            );
+
+            const response = await rawWorkerFetch(request);
+
+            expect(response.status).toBe(401);
+            expect(
+                response.headers.get("WWW-Authenticate"),
+            ).toBe("Bearer");
+        }
+    });
+
+    it("forbids API access when the token has insufficient permissions", async () => {
+        const requests = [
+            new Request(
+                "http://example.com/api/events",
+                {
+                    method: "POST",
+                    headers: {
+                            Authorization:
+                                `Bearer ${env.DASHBOARD_API_TOKEN}`,
+                            "Content-Type": "application/json",
+                    },
+                    body: JSON.stringify({
+                            method: "GET",
+                            path: "/api/test",
+                            status: 200,
+                            latencyMs: 25,
+                    }),
+                },
+            ),
+            new Request(
+                "http://example.com/api/metrics",
+                {
+                    headers: {
+                            Authorization:
+                                `Bearer ${env.INGEST_API_TOKEN}`,
+                    },
+                },
+            ),
+            new Request(
+                "http://example.com/api/incidents/test-id",
+                {
+                    method: "PATCH",
+                    headers: {
+                            Authorization:
+                                `Bearer ${env.DASHBOARD_API_TOKEN}`,
+                            "Content-Type": "application/json",
+                    },
+                    body: JSON.stringify({
+                            status: "resolved",
+                    }),
+                },
+            ),
+        ];
+
+        for (const request of requests) {
+            const response = await rawWorkerFetch(request);
+
+            expect(response.status).toBe(403);
+            expect(await response.json()).toEqual({
+                error: "Forbidden",
+            });
+        }
+
+        const eventCount = await env.edgeguard_db
+            .prepare("SELECT COUNT(*) AS total FROM events")
+            .first<{ total: number }>();
+
+        expect(eventCount?.total).toBe(0);
     });
 
     it("rate limits repeated event-ingestion requests", async () => {
@@ -920,7 +1109,7 @@ describe("EdgeGuard Worker", () => {
                 },
             );
 
-            const response = await exports.default.fetch(request);
+            const response = await fetchTestRequest(request);
 
             responses.push({ clientId, response });
         }
