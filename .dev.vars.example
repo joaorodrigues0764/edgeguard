@@ -1,0 +1,3 @@
+INGEST_API_TOKEN="replace-with-a-random-ingest-token"
+DASHBOARD_API_TOKEN="replace-with-a-random-dashboard-token"
+ADMIN_API_TOKEN="replace-with-a-random-admin-token"
