@@ -1,6 +1,10 @@
 import {
+    hashEventInput,
     insertEvent,
+    insertOrGetIdempotentEvent,
+    markEventQueued,
     validateEventInput,
+    type Event,
     type EventReceivedMessage,
 } from "./events";
 import { detectAnomaly } from "./anomaly";
@@ -398,10 +402,10 @@ export default {
             try {
                     body = await request.json();
             } catch {
-                    return Response.json(
-                            { error: "Invalid JSON body" },
-                            { status: 400 },
-                    );
+                return Response.json(
+                    { error: "Invalid JSON body" },
+                    { status: 400 },
+                );
             }
 
             if (
@@ -410,13 +414,13 @@ export default {
                 Array.isArray(body)
             ) {
                 return Response.json(
-                        { error: "Invalid incident payload" },
-                        { status: 400 },
+                    { error: "Invalid incident payload" },
+                    { status: 400 },
                 );
             }
 
             const statusParam = (
-                    body as Record<string, unknown>
+                body as Record<string, unknown>
             ).status;
 
             if (
@@ -503,6 +507,22 @@ export default {
                 );
             }
 
+            const idempotencyKey =
+                request.headers.get("Idempotency-Key");
+
+            if (
+                idempotencyKey !== null &&
+                !/^[A-Za-z0-9._:-]{1,128}$/.test(idempotencyKey)
+            ) {
+                return Response.json(
+                    {
+                        error:
+                            "Idempotency-Key must contain 1 to 128 letters, numbers, dots, underscores, colons, or hyphens",
+                    },
+                    { status: 400 },
+                );
+            }
+
             let body: unknown;
 
             try {
@@ -523,14 +543,56 @@ export default {
                 );
             }
 
+            let event: Event;
+            let created = true;
+            let queueStatus: "pending" | "sent" = "pending";
+
             try {
-                const event = await insertEvent(
-                    env.edgeguard_db,
-                    input,
+                if (idempotencyKey === null) {
+                    event = await insertEvent(
+                        env.edgeguard_db,
+                        input,
+                    );
+                } else {
+                    const requestHash =
+                        await hashEventInput(input);
+
+                    const stored =
+                        await insertOrGetIdempotentEvent(
+                            env.edgeguard_db,
+                            input,
+                            idempotencyKey,
+                            requestHash,
+                        );
+
+                    if (stored.requestHash !== requestHash) {
+                        return Response.json(
+                            {
+                                error:
+                                    "Idempotency key reused with a different payload",
+                            },
+                            { status: 409 },
+                        );
+                    }
+
+                    event = stored.event;
+                    created = stored.created;
+                    queueStatus = stored.queueStatus;
+                }
+            } catch (error) {
+                console.error(
+                    "Failed to store event:",
+                    error,
                 );
 
-                // Analytics is supplementary; a telemetry failure
-                // should not prevent event ingestion.
+                return Response.json(
+                    { error: "Failed to store event" },
+                    { status: 500 },
+                );
+            }
+
+            // Only record telemetry when the event is first created.
+            if (created) {
                 try {
                     writeEventTelemetry(
                         env.EDGEGUARD_ANALYTICS,
@@ -542,22 +604,55 @@ export default {
                         error,
                     );
                 }
-
-                await env.EVENTS_QUEUE.send({
-                    type: "event.received",
-                    eventId: event.id,
-                });
-
-                return Response.json(
-                    { data: event },
-                    { status: 201 },
-                );
-            } catch {
-                return Response.json(
-                    { error: "Failed to store event" },
-                    { status: 500 },
-                );
             }
+
+            const shouldSendToQueue =
+                idempotencyKey === null ||
+                created ||
+                queueStatus === "pending";
+
+            if (shouldSendToQueue) {
+                try {
+                    await env.EVENTS_QUEUE.send({
+                        type: "event.received",
+                        eventId: event.id,
+                    });
+
+                    await markEventQueued(
+                        env.edgeguard_db,
+                        event.id,
+                    );
+                } catch (error) {
+                    console.error(
+                        `Failed to enqueue event ${event.id}:`,
+                        error,
+                    );
+
+                    return Response.json(
+                        {
+                            error: "Failed to enqueue event",
+                            message:
+                                idempotencyKey !== null
+                                    ? "Retry the request with the same Idempotency-Key to resume delivery."
+                                    : "The event may already be stored. Retrying without an Idempotency-Key can create a duplicate.",
+                        },
+                        { status: 500 },
+                    );
+                }
+            }
+
+            const headers =
+                !created && idempotencyKey !== null
+                    ? { "Idempotency-Replayed": "true" }
+                    : undefined;
+
+            return Response.json(
+                { data: event },
+                {
+                    status: created ? 201 : 200,
+                    headers,
+                },
+            );
         }
 
         // Fallback: 404 Not Found

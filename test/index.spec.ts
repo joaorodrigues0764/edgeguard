@@ -1082,6 +1082,210 @@ describe("EdgeGuard Worker", () => {
         expect(eventCount?.total).toBe(0);
     });
 
+    it("replays an event for the same idempotency key and payload", async () => {
+        const idempotencyKey = "idempotency-replay-test";
+        const payload = {
+            method: "GET",
+            path: "/api/products",
+            status: 200,
+            latencyMs: 100,
+            clientId: "idempotency-client",
+        };
+
+        const createRequest = () => new Request(
+            "http://example.com/api/events",
+            {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "Idempotency-Key": idempotencyKey,
+                    "cf-connecting-ip": "198.51.100.41",
+                },
+                body: JSON.stringify(payload),
+            },
+        );
+
+        const firstResponse = await fetchTestRequest(createRequest());
+
+        expect(firstResponse.status).toBe(201);
+
+        const firstBody =
+            await readJson<EventResponse>(firstResponse);
+
+        const secondResponse = await fetchTestRequest(createRequest());
+
+        expect(secondResponse.status).toBe(200);
+        expect(
+            secondResponse.headers.get("Idempotency-Replayed"),
+        ).toBe("true");
+
+        const secondBody =
+            await readJson<EventResponse>(secondResponse);
+
+        expect(secondBody.data.id).toBe(firstBody.data.id);
+
+        const storedEvents = await env.edgeguard_db
+            .prepare(`
+                SELECT COUNT(*) AS total
+                FROM events
+                WHERE idempotency_key = ?
+            `)
+            .bind(idempotencyKey)
+            .first<{ total: number }>();
+
+        expect(storedEvents?.total).toBe(1);
+    });
+
+    it("rejects an idempotency key reused with a different payload", async () => {
+        const idempotencyKey = "idempotency-conflict-test";
+
+        const createRequest = (path: string) =>
+            new Request("http://example.com/api/events", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "Idempotency-Key": idempotencyKey,
+                    "cf-connecting-ip": "198.51.100.42",
+                },
+                body: JSON.stringify({
+                    method: "GET",
+                    path,
+                    status: 200,
+                    latencyMs: 100,
+                }),
+            });
+
+        const firstResponse = await fetchTestRequest(
+            createRequest("/api/products"),
+        );
+
+        expect(firstResponse.status).toBe(201);
+
+        const conflictResponse = await fetchTestRequest(
+            createRequest("/api/orders"),
+        );
+
+        expect(conflictResponse.status).toBe(409);
+
+        expect(await conflictResponse.json()).toEqual({
+            error: "Idempotency key reused with a different payload",
+        });
+
+        const storedEvents = await env.edgeguard_db
+            .prepare(`
+                SELECT COUNT(*) AS total
+                FROM events
+                WHERE idempotency_key = ?
+            `)
+            .bind(idempotencyKey)
+            .first<{ total: number }>();
+
+        expect(storedEvents?.total).toBe(1);
+    });
+
+    it("rejects an invalid idempotency key", async () => {
+        const response = await fetchTestRequest(
+            new Request("http://example.com/api/events", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "Idempotency-Key": "invalid key with spaces",
+                    "cf-connecting-ip": "198.51.100.43",
+                },
+                body: JSON.stringify({
+                    method: "GET",
+                    path: "/api/products",
+                    status: 200,
+                    latencyMs: 100,
+                }),
+            }),
+        );
+
+        expect(response.status).toBe(400);
+
+        const body = await readJson<ErrorResponse>(response);
+
+        expect(body.error).toBe(
+            "Idempotency-Key must contain 1 to 128 letters, numbers, dots, underscores, colons, or hyphens",
+        );
+
+        const storedEvents = await env.edgeguard_db
+            .prepare("SELECT COUNT(*) AS total FROM events")
+            .first<{ total: number }>();
+
+        expect(storedEvents?.total).toBe(0);
+    });
+
+    it("retries queue delivery for an existing pending event", async () => {
+        const idempotencyKey = "idempotency-queue-retry-test";
+
+        const createRequest = () =>
+            new Request("http://example.com/api/events", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "Idempotency-Key": idempotencyKey,
+                    "cf-connecting-ip": "198.51.100.44",
+                },
+                body: JSON.stringify({
+                    method: "GET",
+                    path: "/api/health",
+                    status: 200,
+                    latencyMs: 25,
+                }),
+            });
+
+        const firstResponse = await fetchTestRequest(createRequest());
+
+        expect(firstResponse.status).toBe(201);
+
+        const firstBody =
+            await readJson<EventResponse>(firstResponse);
+
+        await env.edgeguard_db
+            .prepare(`
+                UPDATE events
+                SET queue_status = 'pending'
+                WHERE idempotency_key = ?
+            `)
+            .bind(idempotencyKey)
+            .run();
+
+        const retryResponse = await fetchTestRequest(createRequest());
+
+        expect(retryResponse.status).toBe(200);
+        expect(
+            retryResponse.headers.get("Idempotency-Replayed"),
+        ).toBe("true");
+
+        const retryBody =
+            await readJson<EventResponse>(retryResponse);
+
+        expect(retryBody.data.id).toBe(firstBody.data.id);
+
+        const storedEvent = await env.edgeguard_db
+            .prepare(`
+                SELECT queue_status
+                FROM events
+                WHERE idempotency_key = ?
+            `)
+            .bind(idempotencyKey)
+            .first<{ queue_status: string }>();
+
+        expect(storedEvent?.queue_status).toBe("sent");
+
+        const storedEvents = await env.edgeguard_db
+            .prepare(`
+                SELECT COUNT(*) AS total
+                FROM events
+                WHERE idempotency_key = ?
+            `)
+            .bind(idempotencyKey)
+            .first<{ total: number }>();
+
+        expect(storedEvents?.total).toBe(1);
+    });
+
     it("rate limits repeated event-ingestion requests", async () => {
         const responses: Array<{
             clientId: string;
