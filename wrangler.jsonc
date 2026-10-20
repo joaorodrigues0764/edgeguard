@@ -45,7 +45,7 @@
 	"ratelimits": [
 		{
 			"name": "EVENT_INGEST_RATE_LIMITER",
-			"namespace_id": "73100826",
+			"namespace_id": "1666914816",
 			"simple": {
 				"limit": 10,
 				"period": 10
