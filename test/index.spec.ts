@@ -4,8 +4,8 @@ import {
     createMessageBatch,
     getQueueResult,
 } from "cloudflare:test";
-import { beforeEach, describe, expect, it } from "vitest";
-import worker from "../src/index";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import worker, { type Env } from "../src/index";
 import { detectAnomaly } from "../src/anomaly";
 import { insertEvent } from "../src/events";
 
@@ -95,7 +95,24 @@ async function readJson<T>(
     return (await response.json()) as T;
 }
 
+
 const rawWorkerFetch = exports.default.fetch.bind(exports.default);
+
+function createTestEnv(
+    queue: Env["EVENTS_QUEUE"] = {
+        send: async () => undefined,
+    } as unknown as Env["EVENTS_QUEUE"],
+): Env {
+    return {
+        edgeguard_db: env.edgeguard_db,
+        EVENTS_QUEUE: queue,
+        EDGEGUARD_ANALYTICS: env.EDGEGUARD_ANALYTICS,
+        EVENT_INGEST_RATE_LIMITER: env.EVENT_INGEST_RATE_LIMITER,
+        INGEST_API_TOKEN: env.INGEST_API_TOKEN,
+        DASHBOARD_API_TOKEN: env.DASHBOARD_API_TOKEN,
+        ADMIN_API_TOKEN: env.ADMIN_API_TOKEN,
+    };
+}
 
 async function fetchTestRequest(
     input: RequestInfo | URL,
@@ -128,16 +145,15 @@ async function fetchTestRequest(
         token = env.DASHBOARD_API_TOKEN;
     }
 
-    if (!token || request.headers.has("Authorization")) {
-        return rawWorkerFetch(request);
+    let requestToSend = request;
+
+    if (token && !request.headers.has("Authorization")) {
+        const headers = new Headers(request.headers);
+        headers.set("Authorization", `Bearer ${token}`);
+        requestToSend = new Request(request, { headers });
     }
 
-    const headers = new Headers(request.headers);
-    headers.set("Authorization", `Bearer ${token}`);
-
-    return rawWorkerFetch(
-        new Request(request, { headers }),
-    );
+    return worker.fetch(requestToSend, createTestEnv());
 }
 
 interface TestIncidentInput {
@@ -1286,6 +1302,101 @@ describe("EdgeGuard Worker", () => {
         expect(storedEvents?.total).toBe(1);
     });
 
+    it("recovers a pending event after a queue send failure", async () => {
+        const idempotencyKey = "queue-failure-recovery-test";
+        const clientIp = "198.51.100.45";
+
+        const createRequest = () =>
+            new Request("http://example.com/api/events", {
+                method: "POST",
+                headers: {
+                    Authorization: `Bearer ${env.INGEST_API_TOKEN}`,
+                    "Content-Type": "application/json",
+                    "Idempotency-Key": idempotencyKey,
+                    "cf-connecting-ip": clientIp,
+                },
+                body: JSON.stringify({
+                    method: "GET",
+                    path: "/api/recovery-test",
+                    status: 200,
+                    latencyMs: 25,
+                }),
+            });
+
+        const failingQueue = {
+            send: async () => {
+                throw new Error("Simulated queue failure");
+            },
+        } as unknown as Env["EVENTS_QUEUE"];
+
+        const errorSpy = vi
+            .spyOn(console, "error")
+            .mockImplementation(() => {});
+
+        let firstResponse: Response;
+
+        try {
+            firstResponse = await worker.fetch(
+                createRequest(),
+                createTestEnv(failingQueue),
+            );
+        } finally {
+            errorSpy.mockRestore();
+        }
+
+        expect(firstResponse.status).toBe(500);
+
+        const pendingEvent = await env.edgeguard_db
+            .prepare(`
+                SELECT id, queue_status
+                FROM events
+                WHERE idempotency_key = ?
+            `)
+            .bind(idempotencyKey)
+            .first<{
+                id: string;
+                queue_status: string;
+            }>();
+
+        expect(pendingEvent).not.toBeNull();
+        expect(pendingEvent?.queue_status).toBe("pending");
+
+        let successfulSendAttempts = 0;
+
+        const workingQueue = {
+            send: async () => {
+                successfulSendAttempts++;
+            },
+        } as unknown as Env["EVENTS_QUEUE"];
+
+        const retryResponse = await worker.fetch(
+            createRequest(),
+            createTestEnv(workingQueue),
+        );
+
+        expect(retryResponse.status).toBe(200);
+        expect(
+            retryResponse.headers.get("Idempotency-Replayed"),
+        ).toBe("true");
+        expect(successfulSendAttempts).toBe(1);
+
+        const savedEvents = await env.edgeguard_db
+            .prepare(`
+                SELECT id, queue_status
+                FROM events
+                WHERE idempotency_key = ?
+            `)
+            .bind(idempotencyKey)
+            .all<{
+                id: string;
+                queue_status: string;
+            }>();
+
+        expect(savedEvents.results).toHaveLength(1);
+        expect(savedEvents.results[0].id).toBe(pendingEvent?.id);
+        expect(savedEvents.results[0].queue_status).toBe("sent");
+    });
+
     it("rate limits repeated event-ingestion requests", async () => {
         const responses: Array<{
             clientId: string;
@@ -1304,7 +1415,7 @@ describe("EdgeGuard Worker", () => {
                         "cf-connecting-ip": "192.0.2.42",
                     },
                     body: JSON.stringify({
-                        method: "GET",
+                        method: "INVALID",
                         path: "/api/products",
                         status: 200,
                         latencyMs: 25,
@@ -1343,9 +1454,15 @@ describe("EdgeGuard Worker", () => {
 
         expect(
             responses.every(({ response }) =>
-                response.status === 201 || response.status === 429
+                response.status === 400 || response.status === 429
             ),
         ).toBe(true);
+
+        const eventCount = await env.edgeguard_db
+            .prepare("SELECT COUNT(*) AS total FROM events")
+            .first<{ total: number }>();
+
+        expect(eventCount?.total).toBe(0);
     });
 });
 
