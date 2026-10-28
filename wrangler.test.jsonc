@@ -1,0 +1,54 @@
+{
+    "$schema": "node_modules/wrangler/config-schema.json",
+    "name": "edgeguard",
+    "main": "src/index.ts",
+    "compatibility_date": "2026-10-01",
+    "triggers": {
+        "crons": ["* * * * *"]
+    },
+    "d1_databases": [
+        {
+            "binding": "edgeguard_db",
+            "database_name": "edgeguard-db",
+            "database_id": "8620ccdd-c40c-4959-a73c-7595a242bb54"
+        }
+    ],
+    "queues": {
+        "producers": [
+            {
+                "queue": "edgeguard-events",
+                "binding": "EVENTS_QUEUE"
+            }
+        ],
+        "consumers": [
+            {
+                "queue": "edgeguard-events",
+                "max_batch_size": 10,
+                "max_batch_timeout": 5
+            }
+        ]
+    },
+    "analytics_engine_datasets": [
+        {
+            "binding": "EDGEGUARD_ANALYTICS",
+            "dataset": "edgeguard_telemetry"
+        }
+    ],
+    "ratelimits": [
+        {
+            "name": "EVENT_INGEST_RATE_LIMITER",
+            "namespace_id": "1666914816",
+            "simple": {
+                "limit": 10,
+                "period": 10
+            }
+        }
+    ],
+    "secrets": {
+        "required": [
+            "INGEST_API_TOKEN",
+            "DASHBOARD_API_TOKEN",
+            "ADMIN_API_TOKEN"
+        ]
+    }
+}

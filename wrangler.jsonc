@@ -3,6 +3,9 @@
 	"name": "edgeguard",
 	"main": "src/index.ts",
 	"compatibility_date": "2026-10-01",
+	"triggers": {
+		"crons": ["* * * * *"]
+	},
 	"observability": {
 		"enabled": true
 	},
@@ -42,6 +45,9 @@
 			"dataset": "edgeguard_telemetry"
 		}
 	],
+	"analytics": {
+		"binding": "ANALYTICS_SQL"
+	},
 	"ratelimits": [
 		{
 			"name": "EVENT_INGEST_RATE_LIMITER",

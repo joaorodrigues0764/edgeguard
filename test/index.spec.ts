@@ -89,6 +89,23 @@ interface ErrorResponse {
     error: string;
 }
 
+interface TelemetryMetricsResponse {
+    data: {
+        hours: number;
+        from: string;
+        to: string;
+        observedEvents: {
+            total: number;
+            serverErrors: number;
+            rateLimitedResponses: number;
+            averageLatencyMs: number;
+        };
+        rejectedIngestion: {
+            total: number;
+        };
+    };
+}
+
 async function readJson<T>(
     response: Response,
 ): Promise<T> {
@@ -98,10 +115,23 @@ async function readJson<T>(
 
 const rawWorkerFetch = exports.default.fetch.bind(exports.default);
 
+const emptyAnalyticsSql = {
+    query: async <T extends Record<string, unknown>>() => ({
+        data: [] as T[],
+        rows: 0,
+        statistics: {
+            elapsed_ms: 0,
+            rows_read: 0,
+            bytes_read: 0,
+        },
+    }),
+} as unknown as Env["ANALYTICS_SQL"];
+
 function createTestEnv(
     queue: Env["EVENTS_QUEUE"] = {
         send: async () => undefined,
     } as unknown as Env["EVENTS_QUEUE"],
+    analyticsSql: Env["ANALYTICS_SQL"] = emptyAnalyticsSql,
 ): Env {
     return {
         edgeguard_db: env.edgeguard_db,
@@ -111,6 +141,7 @@ function createTestEnv(
         INGEST_API_TOKEN: env.INGEST_API_TOKEN,
         DASHBOARD_API_TOKEN: env.DASHBOARD_API_TOKEN,
         ADMIN_API_TOKEN: env.ADMIN_API_TOKEN,
+        ANALYTICS_SQL: analyticsSql,
     };
 }
 
@@ -140,6 +171,7 @@ async function fetchTestRequest(
             "/api/incidents",
             "/api/metrics",
             "/api/metrics/timeseries",
+            "/api/metrics/telemetry",
         ].includes(url.pathname)
     ) {
         token = env.DASHBOARD_API_TOKEN;
@@ -296,6 +328,24 @@ describe("EdgeGuard Worker", () => {
         });
 
         expect(storedEvent?.latency_ms).toBe(892);
+    });
+
+    it.each([
+        ["POST", "/api/events", "INGEST_API_TOKEN"],
+        ["PATCH", "/api/incidents/test-id", "ADMIN_API_TOKEN"],
+    ] as const)("rejects oversized JSON for %s %s", async (method, path, token) => {
+        const response = await worker.fetch(new Request(`http://example.com${path}`, {
+            method,
+            headers: {
+                Authorization: `Bearer ${env[token]}`,
+                "cf-connecting-ip": "198.51.100.99",
+            },
+            body: JSON.stringify({ extra: "x".repeat(65536) }),
+        }), createTestEnv());
+        expect(response.status).toBe(413);
+        expect(await env.edgeguard_db.prepare(
+            "SELECT COUNT(*) AS total FROM events",
+        ).first()).toEqual({ total: 0 });
     });
 
     it("rejects invalid JSON", async () => {
@@ -1395,6 +1445,221 @@ describe("EdgeGuard Worker", () => {
         expect(savedEvents.results).toHaveLength(1);
         expect(savedEvents.results[0].id).toBe(pendingEvent?.id);
         expect(savedEvents.results[0].queue_status).toBe("sent");
+    });
+
+    it("returns aggregated Analytics Engine telemetry", async () => {
+        const rows = [
+            {
+                telemetry_type: "observed_event",
+                total: 3,
+                server_errors: 1,
+                rate_limited_responses: 1,
+                total_latency_ms: 600,
+            },
+            {
+                telemetry_type: "rate_limited_ingestion",
+                total: 2,
+                server_errors: 0,
+                rate_limited_responses: 2,
+                total_latency_ms: 0,
+            },
+        ];
+
+        const query = vi.fn(async () => ({
+            data: rows,
+            rows: rows.length,
+            statistics: {
+                elapsed_ms: 2,
+                rows_read: 10,
+                bytes_read: 500,
+            },
+        }));
+
+        const analyticsSql = {
+            query,
+        } as unknown as Env["ANALYTICS_SQL"];
+
+        const response = await worker.fetch(
+            new Request(
+                "http://example.com/api/metrics/telemetry?hours=6",
+                {
+                    headers: {
+                        Authorization:
+                            `Bearer ${env.DASHBOARD_API_TOKEN}`,
+                    },
+                },
+            ),
+            createTestEnv(undefined, analyticsSql),
+        );
+
+        expect(response.status).toBe(200);
+
+        const body =
+            await readJson<TelemetryMetricsResponse>(response);
+
+        expect(body.data.hours).toBe(6);
+        expect(body.data.observedEvents).toEqual({
+            total: 3,
+            serverErrors: 1,
+            rateLimitedResponses: 1,
+            averageLatencyMs: 200,
+        });
+        expect(body.data.rejectedIngestion).toEqual({
+            total: 2,
+        });
+        expect(query).toHaveBeenCalledTimes(1);
+    });
+
+    it("returns zero telemetry metrics when the dataset is empty", async () => {
+        const query = vi.fn(async () => ({
+            data: [],
+            rows: 0,
+            statistics: {
+                elapsed_ms: 1,
+                rows_read: 0,
+                bytes_read: 0,
+            },
+        }));
+
+        const analyticsSql = {
+            query,
+        } as unknown as Env["ANALYTICS_SQL"];
+
+        const response = await worker.fetch(
+            new Request(
+                "http://example.com/api/metrics/telemetry",
+                {
+                    headers: {
+                        Authorization:
+                            `Bearer ${env.DASHBOARD_API_TOKEN}`,
+                    },
+                },
+            ),
+            createTestEnv(undefined, analyticsSql),
+        );
+
+        expect(response.status).toBe(200);
+
+        const body =
+            await readJson<TelemetryMetricsResponse>(response);
+
+        expect(body.data.hours).toBe(24);
+        expect(body.data.observedEvents).toEqual({
+            total: 0,
+            serverErrors: 0,
+            rateLimitedResponses: 0,
+            averageLatencyMs: 0,
+        });
+        expect(body.data.rejectedIngestion.total).toBe(0);
+    });
+
+    it("rejects invalid telemetry time ranges", async () => {
+        const query = vi.fn(async () => ({
+            data: [],
+            rows: 0,
+            statistics: {
+                elapsed_ms: 1,
+                rows_read: 0,
+                bytes_read: 0,
+            },
+        }));
+
+        const analyticsSql = {
+            query,
+        } as unknown as Env["ANALYTICS_SQL"];
+
+        for (const hours of ["0", "169", "abc", "1.5"]) {
+            const response = await worker.fetch(
+                new Request(
+                    `http://example.com/api/metrics/telemetry?hours=${hours}`,
+                    {
+                        headers: {
+                            Authorization:
+                                `Bearer ${env.DASHBOARD_API_TOKEN}`,
+                        },
+                    },
+                ),
+                createTestEnv(undefined, analyticsSql),
+            );
+
+            expect(response.status).toBe(400);
+
+            const body =
+                await readJson<ErrorResponse>(response);
+
+            expect(body.error).toBe(
+                "hours must be an integer between 1 and 168",
+            );
+        }
+
+        expect(query).not.toHaveBeenCalled();
+    });
+
+    it("returns 502 when the Analytics SQL query fails", async () => {
+        const query = vi.fn(async () => {
+            throw new Error("Simulated Analytics SQL failure");
+        });
+
+        const analyticsSql = {
+            query,
+        } as unknown as Env["ANALYTICS_SQL"];
+
+        const errorSpy = vi
+            .spyOn(console, "error")
+            .mockImplementation(() => {});
+
+        let response: Response;
+
+        try {
+            response = await worker.fetch(
+                new Request(
+                    "http://example.com/api/metrics/telemetry",
+                    {
+                        headers: {
+                            Authorization:
+                                `Bearer ${env.DASHBOARD_API_TOKEN}`,
+                        },
+                    },
+                ),
+                createTestEnv(undefined, analyticsSql),
+            );
+        } finally {
+            errorSpy.mockRestore();
+        }
+
+        expect(response.status).toBe(502);
+        expect(await response.json()).toEqual({
+            error: "Failed to query Analytics Engine telemetry",
+        });
+    });
+
+    it("requires authentication for telemetry metrics", async () => {
+        const query = vi.fn(async () => ({
+            data: [],
+            rows: 0,
+            statistics: {
+                elapsed_ms: 1,
+                rows_read: 0,
+                bytes_read: 0,
+            },
+        }));
+
+        const analyticsSql = {
+            query,
+        } as unknown as Env["ANALYTICS_SQL"];
+
+        const response = await worker.fetch(
+            new Request(
+                "http://example.com/api/metrics/telemetry",
+            ),
+            createTestEnv(undefined, analyticsSql),
+        );
+
+        expect(response.status).toBe(401);
+        expect(
+            response.headers.get("WWW-Authenticate"),
+        ).toBe("Bearer");
+        expect(query).not.toHaveBeenCalled();
     });
 
     it("rate limits repeated event-ingestion requests", async () => {

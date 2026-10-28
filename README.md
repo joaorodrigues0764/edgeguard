@@ -8,12 +8,14 @@ EdgeGuard ingests application events, detects anomalous behaviour, creates incid
 
 - **Event ingestion:** validate and store application events using Cloudflare Workers and D1.
 - **Asynchronous processing:** publish events to Cloudflare Queues and analyse them in a queue consumer.
+- **Delivery recovery:** retry stored events whose initial queue publication failed, using a scheduled recovery job.
 - **Anomaly detection:** identify server errors, rate-limited responses, and high-latency requests.
 - **Incident management:** create incidents with severity levels, prevent duplicate incidents for the same event, and update incident status.
 - **Operational metrics:** calculate event counts, server-error counts, rate-limited responses, average latency, and incident statistics.
 - **Time-series metrics:** aggregate event data into hourly buckets, including intervals with no events.
 - **Request rate limiting:** protect event ingestion with Cloudflare's Rate Limiting API.
 - **Telemetry:** send event and rate-limited ingestion telemetry to Cloudflare Analytics Engine.
+- **Telemetry queries:** retrieve sampled telemetry aggregates through the Analytics SQL binding.
 - **API authentication:** use Bearer tokens with separate ingestion, dashboard, and administrator permissions.
 - **Automated tests:** validate API behaviour, anomaly detection, queue processing, telemetry mapping, metrics, and access control.
 
@@ -44,6 +46,8 @@ flowchart TD
 
 Incident creation is idempotent for each event: the database prevents duplicate incidents for the same event.
 
+A Cron Trigger runs every minute and republishes up to 50 pending events that are at least one minute old, including events submitted without an idempotency key. Events are marked as sent only after the queue confirms publication. A crash between publication and the database update may cause duplicate delivery; the consumer's unique event constraint prevents duplicate incidents.
+
 ## Technology stack
 
 | Technology | Purpose |
@@ -70,6 +74,7 @@ All protected endpoints require a Bearer token. The public health check is the o
 | `PATCH` | `/api/incidents/:id` | Administrator |
 | `GET` | `/api/metrics` | Dashboard or administrator |
 | `GET` | `/api/metrics/timeseries?hours=24` | Dashboard or administrator |
+| `GET` | `/api/metrics/telemetry?hours=24` | Dashboard or administrator |
 
 ### Authentication
 
@@ -124,6 +129,10 @@ The event payload contains:
 
 Successful ingestion returns `201 Created`. Invalid JSON or an invalid payload returns `400 Bad Request`.
 
+Both JSON write endpoints (`POST /api/events` and `PATCH /api/incidents/:id`) accept bodies up to 64 KiB (65,536 bytes). Larger bodies return `413 Content Too Large`, including streamed requests without a `Content-Length` header.
+
+For safe retries, send an optional `Idempotency-Key` header containing 1 to 128 letters, numbers, dots, underscores, colons, or hyphens. Repeating a key with the same normalized payload returns the original event with `200 OK` and `Idempotency-Replayed: true`; reusing it with a different payload returns `409 Conflict`. If queue publication fails, the API returns `500` while retaining the event for a client retry or scheduled recovery. A retry without a key can create a second event.
+
 ### List events
 
 ```bash
@@ -172,6 +181,17 @@ curl "http://localhost:8787/api/metrics/timeseries?hours=24" \
 ```
 
 The `hours` parameter accepts integers from 1 to 168 and defaults to 24. The response contains hourly buckets ordered by timestamp, including buckets with no events.
+
+### Analytics Engine telemetry metrics
+
+```bash
+curl "http://localhost:8787/api/metrics/telemetry?hours=24" \
+  -H "Authorization: Bearer YOUR_DASHBOARD_TOKEN"
+```
+
+The `hours` parameter accepts integers from 1 to 168 and defaults to 24. The response separates observed application events from requests rejected by the ingestion rate limiter, and includes the queried UTC time range. Analytics SQL applies sampling weights automatically, so these aggregates are estimates and may differ from the D1 totals. A failed upstream query returns `502 Bad Gateway`.
+
+The Analytics SQL binding queries Cloudflare-hosted data and requires the account's Analytics Engine entitlement. The automated tests use a stub for this binding and do not validate a live query. The dedicated `wrangler.test.jsonc` omits the SQL binding to keep tests offline; the production configuration includes it.
 
 ## Local development
 
@@ -228,6 +248,7 @@ Check TypeScript compilation:
 
 ```bash
 npx tsc --noEmit
+npm run typecheck:test
 ```
 
 The tests cover API endpoints, event validation, anomaly detection, queue processing, incident lifecycle operations, telemetry data-point mapping, rate limiting, dashboard metrics, time-series aggregation, and authorization.
@@ -248,11 +269,22 @@ npx wrangler secret put ADMIN_API_TOKEN
 
 Provide each secret value interactively. Production secrets must be generated and managed separately from local development tokens.
 
+Apply D1 migrations before deploying the Worker, including the index used by pending delivery recovery:
+
+```bash
+npx wrangler d1 migrations apply edgeguard-db --remote
+npm run deploy
+```
+
+Deployment also installs the configured Cron Trigger. Scheduled recovery can be exercised locally with `npx wrangler dev --test-scheduled` and `curl 'http://localhost:8787/cdn-cgi/handler/scheduled'`.
+
 A successful local test run does not by itself establish that the production resources have been configured or that the Worker has been deployed.
 
 ## Design notes and limitations
 
 - Metrics are calculated from the events and incidents stored in D1.
+- `/api/metrics/telemetry` separately queries Analytics Engine through Analytics SQL; its rolling time window differs from the calendar-hour buckets used by `/api/metrics/timeseries`.
+- Recovery covers pending queue publication. Once publication succeeds, consumer processing follows the queue's retry and retention configuration; no dead-letter queue is currently configured.
 - `rateLimitedResponses` in the dashboard metrics counts observed application events with HTTP status `429`. Requests rejected by EdgeGuard's own ingestion rate limiter are recorded separately in Analytics Engine and are not included in the D1 event total.
 - Time-series timestamps represent the start of each hour in Unix milliseconds.
 - The ingestion rate limiter is keyed by the connecting client IP address.
@@ -267,4 +299,8 @@ EdgeGuard is a portfolio project demonstrating serverless backend engineering an
 - [D1](https://developers.cloudflare.com/d1/)
 - [Queues](https://developers.cloudflare.com/queues/)
 - [Analytics Engine](https://developers.cloudflare.com/analytics/analytics-engine/)
+- [Analytics SQL sampling and aggregates](https://developers.cloudflare.com/analytics/sql-api/sql-reference/functions/)
+- [Analytics SQL Workers binding](https://developers.cloudflare.com/analytics/sql-api/workers-binding/)
+- [Queue delivery guarantees](https://developers.cloudflare.com/queues/reference/delivery-guarantees/)
+- [Cron Triggers](https://developers.cloudflare.com/workers/configuration/cron-triggers/)
 - [Workers configuration and secrets](https://developers.cloudflare.com/workers/wrangler/configuration/)

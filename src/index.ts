@@ -25,6 +25,9 @@ import {
     getDashboardTimeSeries,
 } from "./metrics";
 import { authorizeRequest, type ApiRole } from "./auth";
+import { getTelemetryMetrics } from "./analytics";
+import { retryPendingEvents } from "./delivery";
+import { readJsonBody } from "./body";
 
 export interface Env {
     edgeguard_db: D1Database;
@@ -34,6 +37,7 @@ export interface Env {
     INGEST_API_TOKEN: string;
     DASHBOARD_API_TOKEN: string;
     ADMIN_API_TOKEN: string;
+    ANALYTICS_SQL: AnalyticsSQLBinding;
 }
 
 function isEventReceivedMessage(
@@ -69,6 +73,14 @@ function isIncidentStatus(
 }
 
 export default {
+    async scheduled(controller, env): Promise<void> {
+        await retryPendingEvents(
+            env.edgeguard_db,
+            env.EVENTS_QUEUE,
+            controller.scheduledTime,
+        );
+    },
+
     async queue(batch, env, ctx): Promise<void> {
         for (const message of batch.messages) {
             const body: unknown = message.body;
@@ -157,6 +169,7 @@ export default {
                 "/api/incidents",
                 "/api/metrics",
                 "/api/metrics/timeseries",
+                "/api/metrics/telemetry",
             ].includes(path)
         ) {
             allowedRoles = ["dashboard", "admin"];
@@ -251,6 +264,54 @@ export default {
                         },
                         { status: 500 },
                     );
+            }
+        }
+
+        // Query Analytics Engine telemetry
+        if (
+            method === "GET" &&
+            path === "/api/metrics/telemetry"
+        ) {
+            const hoursParam =
+                url.searchParams.get("hours") ?? "24";
+            const hours = Number(hoursParam);
+
+            if (
+                !Number.isInteger(hours) ||
+                hours < 1 ||
+                hours > 168
+            ) {
+                return Response.json(
+                    {
+                        error:
+                            "hours must be an integer between 1 and 168",
+                    },
+                    { status: 400 },
+                );
+            }
+
+            try {
+                const metrics = await getTelemetryMetrics(
+                    env.ANALYTICS_SQL,
+                    hours,
+                );
+
+                return Response.json({
+                    data: metrics,
+                });
+            } catch (error) {
+                console.error(
+                    "Failed to query Analytics Engine telemetry:",
+                    error,
+                );
+
+                return Response.json(
+                    {
+                        error:
+                            "Failed to query Analytics Engine telemetry",
+                    },
+                    { status: 502 },
+                );
             }
         }
 
@@ -397,16 +458,9 @@ export default {
         ) {
             const incidentId = incidentPathMatch[1];
 
-            let body: unknown;
-
-            try {
-                    body = await request.json();
-            } catch {
-                return Response.json(
-                    { error: "Invalid JSON body" },
-                    { status: 400 },
-                );
-            }
+            const parsed = await readJsonBody(request);
+            if (!parsed.ok) return parsed.response;
+            const body = parsed.value;
 
             if (
                 typeof body !== "object" ||
@@ -523,16 +577,9 @@ export default {
                 );
             }
 
-            let body: unknown;
-
-            try {
-                body = await request.json();
-            } catch {
-                return Response.json(
-                    { error: "Invalid JSON body" },
-                    { status: 400 },
-                );
-            }
+            const parsed = await readJsonBody(request);
+            if (!parsed.ok) return parsed.response;
+            const body = parsed.value;
 
             const input = validateEventInput(body);
 
