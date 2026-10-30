@@ -14,7 +14,7 @@ export interface TelemetryMetrics {
 }
 
 type TelemetryAggregateRow = Record<string, unknown> & {
-    telemetry_type: string;
+    blob4: string;
     total: number;
     server_errors: number;
     rate_limited_responses: number;
@@ -34,7 +34,7 @@ export async function getTelemetryMetrics(
     const result = await analytics.query<TelemetryAggregateRow>({
         query: `
             SELECT
-                blob4 AS telemetry_type,
+                blob4,
                 SUM(double1) AS total,
                 SUM(double3) AS server_errors,
                 SUM(double4) AS rate_limited_responses,
@@ -53,11 +53,11 @@ export async function getTelemetryMetrics(
     });
 
     const observed = result.data.find(
-        (row) => row.telemetry_type === "observed_event",
+        (row) => row.blob4 === "observed_event",
     );
 
     const rejected = result.data.find(
-        (row) => row.telemetry_type === "rate_limited_ingestion",
+        (row) => row.blob4 === "rate_limited_ingestion",
     );
 
     const observedTotal = Number(observed?.total ?? 0);

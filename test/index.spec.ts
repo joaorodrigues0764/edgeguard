@@ -1450,14 +1450,14 @@ describe("EdgeGuard Worker", () => {
     it("returns aggregated Analytics Engine telemetry", async () => {
         const rows = [
             {
-                telemetry_type: "observed_event",
+                blob4: "observed_event",
                 total: 3,
                 server_errors: 1,
                 rate_limited_responses: 1,
                 total_latency_ms: 600,
             },
             {
-                telemetry_type: "rate_limited_ingestion",
+                blob4: "rate_limited_ingestion",
                 total: 2,
                 server_errors: 0,
                 rate_limited_responses: 2,

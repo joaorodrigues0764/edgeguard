@@ -6,7 +6,7 @@ describe("Analytics SQL sampling contract", () => {
         const query = vi.fn(async (_request: AnalyticsSQLQuery) => ({
             // These aggregates are already weighted by the SQL API.
             data: [{
-                telemetry_type: "observed_event", total: 100,
+                blob4: "observed_event", total: 100,
                 server_errors: 10, rate_limited_responses: 5, total_latency_ms: 25000,
             }],
             rows: 1, statistics: { elapsed_ms: 1, rows_read: 10, bytes_read: 100 },
@@ -17,6 +17,7 @@ describe("Analytics SQL sampling contract", () => {
         );
         const request = query.mock.calls[0]![0];
         expect(request.query).not.toMatch(/sampleInterval/i);
+        expect(request.query).toMatch(/SELECT\s+blob4\s*,/);
         expect(request.query).toContain("SUM(double1)");
         expect(request.query).toContain("SUM(double2)");
         expect(request.params).toEqual({
