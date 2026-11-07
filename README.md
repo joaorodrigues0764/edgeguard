@@ -4,6 +4,23 @@
 
 EdgeGuard ingests application events, detects anomalous behaviour, creates incidents, and exposes operational metrics through an authenticated API. It uses Cloudflare's developer platform to demonstrate event-driven architecture, serverless data processing, observability, and role-based access control.
 
+## Try the synthetic demo
+
+From a clean checkout, install Node.js (verified with 26), npm and Python 3, then run:
+
+```bash
+npm ci
+npm run demo
+```
+
+Open the loopback dashboard URL printed in the terminal and use its temporary password. The demo runs without a Cloudflare account or a project `.dev.vars`. Each run migrates a fresh temporary D1 database, seeds healthy hourly history, then submits three **synthetic** anomalies through the actual ingestion and queue paths. Refresh after the queue processes the batch. Select **GET /synthetic/checkout**, inspect its analysis, mark it resolved and use the status filter to find and reopen it. Ctrl+C discards the demo state. The chart is relative to the current hour; IDs, timestamps and the temporary password change each run.
+
+The demo uses a deterministic **fixture** instead of a hosted model. The banner and synthetic paths identify the sample data. For one real inference without deploying, follow the [live smoke test](docs/live-smoke.md).
+
+![English operations dashboard displaying synthetic hourly activity and three incidents](docs/images/dashboard-overview.png)
+
+![Selected synthetic checkout incident with its rule, sample hypotheses and suggested checks](docs/images/incident-detail.png)
+
 ## Features
 
 - **Event ingestion:** validate and store application events using Cloudflare Workers and D1.
@@ -23,16 +40,20 @@ EdgeGuard ingests application events, detects anomalous behaviour, creates incid
 
 ```mermaid
 flowchart TD
-    Client[API Client] --> Worker[Cloudflare Worker]
-    Worker --> Auth[Bearer Token Authorization]
-    Auth --> D1[(Cloudflare D1)]
-    Worker --> Queue[Cloudflare Queues]
-    Queue --> Consumer[Queue Consumer]
-    Consumer --> Detect[Anomaly Detection]
-    Detect --> D1
-    Worker --> Analytics[Cloudflare Analytics Engine]
-    Worker --> Metrics[Metrics API]
-    Metrics --> D1
+    Client[Event reporter] -->|Ingest token| Worker[Worker API]
+    Worker -->|Persist event| D1[(D1: events and incidents)]
+    Worker -->|Event ID| Queue[Cloudflare Queues]
+    Cron[Scheduled recovery] -->|Republish pending events| Queue
+    Queue --> Rules[Deterministic anomaly rules]
+    Rules -->|Insert unique incident first| D1
+    Rules -->|Claim analysis in D1| Analysis[Analysis worker code]
+    Analysis -->|Status and latency| Gateway[AI Gateway]
+    Gateway --> Model[Workers AI]
+    Model --> Validate[Server schema validation]
+    Validate -->|Store result or mark failed| D1
+    Browser[Operator dashboard] -->|Signed session| Worker
+    Worker -->|Scoped reads, status updates and retries| D1
+    Worker --> Analytics[Analytics Engine]
 ```
 
 ### Event processing
@@ -42,7 +63,8 @@ flowchart TD
 3. The Worker records telemetry and publishes a message to a Cloudflare Queue.
 4. The queue consumer retrieves the event and runs the anomaly detection rules.
 5. If an anomaly is detected, an incident is created in D1.
-6. Clients with the appropriate permissions can query events, inspect incidents, and retrieve metrics.
+6. When AI is configured, the consumer claims an analysis attempt, calls Workers AI through AI Gateway and validates the result against a strict schema before storing it. Provider and validation failures mark only the analysis as failed.
+7. Clients with the appropriate permissions can query events, inspect incidents, and retrieve metrics.
 
 Incident creation is idempotent for each event: the database prevents duplicate incidents for the same event.
 
@@ -63,7 +85,7 @@ A Cron Trigger runs every minute and republishes up to 50 pending events that ar
 
 ## API reference
 
-All protected endpoints require a Bearer token. The public health check is the only endpoint that does not require authentication.
+All protected endpoints require a Bearer token. Health and dashboard sign-in assets are public; dashboard data requires a session.
 
 | Method | Endpoint | Permission |
 |---|---|---|
@@ -72,6 +94,7 @@ All protected endpoints require a Bearer token. The public health check is the o
 | `GET` | `/api/events?limit=20` | Dashboard or administrator |
 | `GET` | `/api/incidents?limit=20` | Dashboard or administrator |
 | `PATCH` | `/api/incidents/:id` | Administrator |
+| `POST` | `/api/incidents/:id/analysis/retry` | Administrator; failed or expired attempt only |
 | `GET` | `/api/metrics` | Dashboard or administrator |
 | `GET` | `/api/metrics/timeseries?hours=24` | Dashboard or administrator |
 | `GET` | `/api/metrics/telemetry?hours=24` | Dashboard or administrator |
@@ -234,6 +257,8 @@ npx wrangler d1 migrations apply edgeguard-db --local
 npm run dev
 ```
 
+The main Wrangler configuration includes a remote Workers AI binding and requires Cloudflare authentication. For an account-free local run, use `npm run demo`.
+
 The examples above assume the default local Worker address, `http://localhost:8787`.
 
 ## Testing
@@ -289,7 +314,9 @@ A successful local test run does not by itself establish that the production res
 - Time-series timestamps represent the start of each hour in Unix milliseconds.
 - The ingestion rate limiter is keyed by the connecting client IP address.
 - Bearer tokens use static configured secrets. This project does not currently implement user accounts, per-user identities, or expiring access tokens.
-- The current project provides the backend API for a potential dashboard; it does not include a separate frontend dashboard application.
+- The model sees only HTTP status and latency. A valid schema does not establish factual accuracy: possible causes are hypotheses for an operator to check. Analysis never updates incident status.
+- Legacy incidents show “Not requested”. There is no automatic backfill. Provider errors, invalid output and timeouts need an operator retry; an interrupted running claim becomes retryable after one minute. The attempt ID prevents late completions from overwriting a newer result. Retries can consume inference even if a previous provider request completed without saving its response.
+- The offline demo does not verify provider credentials, billing, model behaviour, remote analytics or production configuration.
 
 EdgeGuard is a portfolio project demonstrating serverless backend engineering and observability patterns. It has not been independently security-audited and should not be treated as a production security product without further review.
 
@@ -307,7 +334,7 @@ EdgeGuard is a portfolio project demonstrating serverless backend engineering an
 
 ## Dashboard
 
-Open `/dashboard` or `/` to view all-time D1 metrics, hourly activity for the last 24 hours and up to 100 recent incidents per filter. Select an incident to inspect its rule and event details, resolve it or reopen it. Data refreshes on sign-in, on request and after status changes. AI analysis is planned.
+Open `/dashboard` or `/` to view all-time D1 metrics, hourly activity for the last 24 hours and up to 100 recent incidents per filter. Select an incident to inspect its rule and event details, resolve it or reopen it. Data refreshes on sign-in, on request and after status changes. The detail panel shows analysis state, validated results and a retry action for failed analysis.
 
 Configure the three distinct API tokens described above and a separate `DASHBOARD_PASSWORD` of at least 32 characters. Generate a password with `openssl rand -hex 32` and set it in the ignored local `.dev.vars` file. For production, use `npx wrangler secret put DASHBOARD_PASSWORD`.
 
