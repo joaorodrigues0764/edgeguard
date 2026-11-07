@@ -74,12 +74,56 @@ describe('Incident analysis', () => {
         expect((await incidents())[0].analysisState).toBe('failed');
         run.mockResolvedValueOnce({response: sample});
         expect((await retry(row.id)).status).toBe(200);
-        release({response: {...sample, summary: 'Stale response.'}});
+        release({response: {...sample, summary: 'This valid response belongs to the expired attempt.'}});
         await first;
         expect((await incidents())[0].analysis).toEqual(sample);
     });
 
-    it.each(['invalid JSON', 'wrong schema', 'single-letter output', 'gateway error', 'timeout'])('preserves the incident on %s and permits one successful admin retry', async (failure) => {
+    it('cancels a pending inference at the timeout and permits a retry', async () => {
+        const {run, deliver, incidents, retry} = await setup();
+        const timeout = AbortSignal.timeout.bind(AbortSignal);
+        const deadline = vi.spyOn(AbortSignal, 'timeout').mockImplementation(() => timeout(5));
+        try {
+            run.mockImplementationOnce((_model, _input, {signal}) => new Promise((_resolve, reject) => {
+                signal.throwIfAborted();
+                signal.addEventListener('abort', () => reject(signal.reason), {once: true});
+            }));
+            await deliver();
+            expect(deadline).toHaveBeenCalledWith(20_000);
+        } finally {
+            deadline.mockRestore();
+        }
+        const [row] = await incidents();
+        expect(row).toMatchObject({analysisState: 'failed', analysis: null, status: 'open'});
+        run.mockResolvedValueOnce({response: sample});
+        expect((await retry(row.id)).status).toBe(200);
+        expect((await incidents())[0].analysis).toEqual(sample);
+    });
+
+    it('preserves a resolved incident when D1 rejects the retry result', async () => {
+        const {run, deliver, incidents, retry} = await setup();
+        run.mockRejectedValueOnce(new Error('Gateway unavailable'));
+        await deliver();
+        const [row] = await incidents();
+        await updateIncidentStatus(env.edgeguard_db, row.id, 'resolved');
+        await env.edgeguard_db.prepare(`CREATE TRIGGER reject_analysis BEFORE UPDATE ON incidents
+            WHEN NEW.analysis_state = 'complete' BEGIN SELECT RAISE(ABORT, 'injected write failure'); END`).run();
+        run.mockResolvedValue({response: sample});
+        try {
+            const response = await retry(row.id);
+            expect(response.status).toBe(503);
+            expect(await response.json()).toEqual({error: 'Could not confirm the analysis state. Refresh the incident before retrying.'});
+            expect((await incidents())[0]).toMatchObject({analysisState: 'running', analysis: null, status: 'resolved'});
+            expect((await retry(row.id)).status).toBe(409);
+        } finally {
+            await env.edgeguard_db.prepare('DROP TRIGGER reject_analysis').run();
+        }
+        await env.edgeguard_db.prepare('UPDATE incidents SET analysis_expires_at = 0 WHERE id = ?').bind(row.id).run();
+        expect((await retry(row.id)).status).toBe(200);
+        expect((await incidents())[0]).toMatchObject({analysisState: 'complete', analysis: sample, status: 'resolved'});
+    });
+
+    it.each(['invalid JSON', 'wrong schema', 'single-letter output', 'gateway error'])('preserves the incident on %s and permits one successful admin retry', async (failure) => {
         const {run, deliver, incidents, retry, config} = await setup();
         if (failure === 'single-letter output') run.mockResolvedValueOnce({response: {summary: 'A', possibleCauses: ['H'], suggestedNextSteps: ['C']}});
         else if (failure === 'invalid JSON') run.mockResolvedValueOnce({response: '{'});

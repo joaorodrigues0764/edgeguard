@@ -207,11 +207,16 @@ const worker = {
         }
 
         if (retryMatch) {
-            const incident = await env.edgeguard_db.prepare('SELECT event_id FROM incidents WHERE id = ?').bind(retryMatch[1]).first<{event_id: string}>();
-            if (!incident) return Response.json({ error: 'Incident not found.' }, { status: 404 });
-            if (!env.AI || !env.AI_GATEWAY_ID) return Response.json({ error: 'Analysis is not configured.' }, { status: 503 });
-            const claimed = await analyse(env, incident.event_id, true);
-            return claimed ? Response.json({ ok: true }) : Response.json({ error: 'Analysis is not eligible for retry.' }, { status: 409 });
+            try {
+                const incident = await env.edgeguard_db.prepare('SELECT event_id FROM incidents WHERE id = ?').bind(retryMatch[1]).first<{event_id: string}>();
+                if (!incident) return Response.json({ error: 'Incident not found.' }, { status: 404 });
+                if (!env.AI || !env.AI_GATEWAY_ID) return Response.json({ error: 'Analysis is not configured.' }, { status: 503 });
+                const claimed = await analyse(env, incident.event_id, true);
+                return claimed ? Response.json({ ok: true }) : Response.json({ error: 'Analysis is not eligible for retry.' }, { status: 409 });
+            } catch {
+                console.warn('Incident analysis: retry storage request failed.');
+                return Response.json({ error: 'Could not confirm the analysis state. Refresh the incident before retrying.' }, { status: 503 });
+            }
         }
 
         // Dashboard time-series metrics

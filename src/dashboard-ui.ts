@@ -601,7 +601,7 @@ function detail(item) {
         el('h3', 'Rule analysis'),
         el('p', item.reason),
         el('h3', 'AI analysis'),
-        el('p', ({not_requested: 'Not requested.', pending: 'Pending.', running: 'In progress. Refresh to check.', failed: 'Analysis failed. The rule-created incident is preserved.', complete: 'Complete.'})[item.analysisState], 'notice')
+        el('p', ({not_requested: 'Not requested.', pending: 'Pending.', running: 'In progress. Refresh to check.', failed: 'Analysis did not complete. You can retry it here.', complete: 'Complete.'})[item.analysisState], 'notice')
     );
 
     if (item.analysis) {
@@ -620,6 +620,7 @@ function detail(item) {
                 await api('api/incidents/' + encodeURIComponent(item.id) + '/analysis/retry', {method: 'POST'});
                 await loadIncidents();
             } catch (error) {
+                await loadIncidents();
                 message(error.message);
             } finally {
                 retry.disabled = false;
