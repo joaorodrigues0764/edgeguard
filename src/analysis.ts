@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { Env } from './index';
 
-const sentence = z.string().min(1).max(700).regex(/\S/);
+const sentence = z.string().trim().min(20).max(700).regex(/\S+\s+\S+/);
 const list = z.array(sentence).min(1).max(4);
 const schema = z.strictObject({ summary: sentence, possibleCauses: list, suggestedNextSteps: list });
 export const analysisJsonSchema = z.toJSONSchema(schema);
@@ -33,7 +33,7 @@ export async function analyse(env: Env, eventId: string, retry = false): Promise
         if (!env.AI || !env.AI_GATEWAY_ID) throw new Error('Inference unavailable');
         const output = await env.AI.run('@cf/meta/llama-3.3-70b-instruct-fp8-fast', {
             messages: [
-                { role: 'system', content: 'Write concise English incident triage. Summarise only the observed HTTP status and latency in milliseconds. Frame possible causes as unverified hypotheses. Suggest specific checks, never claim a root cause.' },
+                { role: 'system', content: 'Write concise English incident triage. Summarise only the observed HTTP status and latency in milliseconds. Frame possible causes as unverified hypotheses. Suggest specific checks, never claim a root cause. Write complete explanatory sentences, at least 20 characters each, for every field and list item. Never return initials or placeholders.' },
                 { role: 'user', content: JSON.stringify(evidence) },
             ],
             response_format: { type: 'json_schema', json_schema: analysisJsonSchema },

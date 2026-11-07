@@ -60,9 +60,10 @@ describe('Incident analysis', () => {
         expect((await incidents())[0].analysis).toEqual(sample);
     });
 
-    it.each(['invalid JSON', 'wrong schema', 'gateway error', 'timeout'])('preserves the incident on %s and permits one successful admin retry', async (failure) => {
+    it.each(['invalid JSON', 'wrong schema', 'single-letter output', 'gateway error', 'timeout'])('preserves the incident on %s and permits one successful admin retry', async (failure) => {
         const {run, deliver, incidents, retry, config} = await setup();
-        if (failure === 'invalid JSON') run.mockResolvedValueOnce({response: '{'});
+        if (failure === 'single-letter output') run.mockResolvedValueOnce({response: {summary: 'A', possibleCauses: ['H'], suggestedNextSteps: ['C']}});
+        else if (failure === 'invalid JSON') run.mockResolvedValueOnce({response: '{'});
         else if (failure === 'wrong schema') run.mockResolvedValueOnce({response: {...sample, possibleCauses: []}});
         else run.mockRejectedValueOnce(new Error(failure));
         await deliver();
