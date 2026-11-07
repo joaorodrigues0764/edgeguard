@@ -4,7 +4,13 @@ import type { Env } from './index';
 const sentence = z.string().trim().min(20).max(700).regex(/\S+\s+\S+/);
 const list = z.array(sentence).min(1).max(4);
 const schema = z.strictObject({ summary: sentence, possibleCauses: list, suggestedNextSteps: list });
-export const analysisJsonSchema = z.toJSONSchema(schema);
+// The decoder needs the field structure; prose quality checks belong on the server.
+const textList = { type: 'array', items: { type: 'string' } };
+const generationSchema = {
+    type: 'object',
+    properties: { summary: { type: 'string' }, possibleCauses: textList, suggestedNextSteps: textList },
+    required: ['summary', 'possibleCauses', 'suggestedNextSteps'],
+};
 export type Analysis = z.infer<typeof schema>;
 
 export function validated(value: unknown): Analysis | null {
@@ -36,15 +42,16 @@ export async function analyse(env: Env, eventId: string, retry = false): Promise
                 { role: 'system', content: 'Write concise English incident triage. Summarise only the observed HTTP status and latency in milliseconds. Frame possible causes as unverified hypotheses. Suggest specific checks, never claim a root cause. Write complete explanatory sentences, at least 20 characters each, for every field and list item. Never return initials or placeholders.' },
                 { role: 'user', content: JSON.stringify(evidence) },
             ],
-            response_format: { type: 'json_schema', json_schema: analysisJsonSchema },
+            response_format: { type: 'json_schema', json_schema: generationSchema },
             max_tokens: 550,
         }, {
             signal: AbortSignal.timeout(20_000),
             gateway: { id: env.AI_GATEWAY_ID, requestTimeoutMs: 18_000, skipCache: true, collectLog: false },
         });
         if (output && typeof output === 'object' && 'response' in output) result = validated(output.response);
-    } catch {
-        // Provider errors and raw model output may contain sensitive details.
+        if (!result) console.warn('Incident analysis: invalid model response.');
+    } catch (error) {
+        console.warn('Incident analysis: provider request failed.', error instanceof Error ? error.name : 'UnknownError');
     }
     // A late response cannot overwrite a newer attempt or change incident status.
     await db.prepare(`UPDATE incidents SET analysis_state = ?, analysis_json = ?,

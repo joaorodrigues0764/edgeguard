@@ -42,6 +42,25 @@ describe('Incident analysis', () => {
         expect(await incidents()).toEqual([expect.objectContaining({analysisState:'complete', analysis:sample, status:'open'})]);
     });
 
+    it('requests only the field structure from the model', async () => {
+        const {run, deliver} = await setup();
+        run.mockResolvedValue({response: sample});
+        await deliver();
+        const [, input] = run.mock.calls[0];
+        expect(input.response_format).toEqual({
+            type: 'json_schema',
+            json_schema: {
+                type: 'object',
+                properties: {
+                    summary: { type: 'string' },
+                    possibleCauses: { type: 'array', items: { type: 'string' } },
+                    suggestedNextSteps: { type: 'array', items: { type: 'string' } },
+                },
+                required: ['summary', 'possibleCauses', 'suggestedNextSteps'],
+            },
+        });
+    });
+
     it('recovers an expired claim and ignores the late response from its previous owner', async () => {
         const {run, deliver, incidents, retry} = await setup();
         let release!: (value: unknown) => void;
