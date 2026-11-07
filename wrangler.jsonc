@@ -14,7 +14,8 @@
 		"required": [
 			"INGEST_API_TOKEN",
 			"DASHBOARD_API_TOKEN",
-			"ADMIN_API_TOKEN"
+			"ADMIN_API_TOKEN",
+			"DASHBOARD_PASSWORD"
 		]
 	},
 	"d1_databases": [
