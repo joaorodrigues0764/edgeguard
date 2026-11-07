@@ -1,3 +1,4 @@
+import { handleDashboard } from "./dashboard";
 import {
     hashEventInput,
     insertEvent,
@@ -30,6 +31,7 @@ import { retryPendingEvents } from "./delivery";
 import { readJsonBody } from "./body";
 
 export interface Env {
+    DASHBOARD_PASSWORD?: string;
     edgeguard_db: D1Database;
     EVENTS_QUEUE: Queue<EventReceivedMessage>;
     EDGEGUARD_ANALYTICS: AnalyticsEngineDataset;
@@ -72,7 +74,7 @@ function isIncidentStatus(
     return value === "open" || value === "resolved";
 }
 
-export default {
+const worker = {
     async scheduled(controller, env): Promise<void> {
         await retryPendingEvents(
             env.edgeguard_db,
@@ -145,6 +147,9 @@ export default {
         const url = new URL(request.url);
         const path = url.pathname;
         const method = request.method;
+
+        const dashboard = await handleDashboard(request, env, (internal) => worker.fetch(internal, env));
+        if (dashboard) return dashboard;
 
         // Health check endpoint
         if (method === "GET" && path === "/health") {
@@ -709,3 +714,5 @@ export default {
         );
     },
 } satisfies ExportedHandler<Env>;
+
+export default worker;
