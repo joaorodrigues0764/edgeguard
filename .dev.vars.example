@@ -1,3 +1,6 @@
 INGEST_API_TOKEN="replace-with-a-random-ingest-token"
 DASHBOARD_API_TOKEN="replace-with-a-random-dashboard-token"
 ADMIN_API_TOKEN="replace-with-a-random-admin-token"
+
+# Separate dashboard login password; generate with: openssl rand -hex 32
+DASHBOARD_PASSWORD=""

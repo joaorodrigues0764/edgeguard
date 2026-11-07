@@ -304,3 +304,13 @@ EdgeGuard is a portfolio project demonstrating serverless backend engineering an
 - [Queue delivery guarantees](https://developers.cloudflare.com/queues/reference/delivery-guarantees/)
 - [Cron Triggers](https://developers.cloudflare.com/workers/configuration/cron-triggers/)
 - [Workers configuration and secrets](https://developers.cloudflare.com/workers/wrangler/configuration/)
+
+## Dashboard
+
+Open `/dashboard` or `/` to view all-time D1 metrics, hourly activity for the last 24 hours and up to 100 recent incidents per filter. Select an incident to inspect its rule and event details, resolve it or reopen it. Data refreshes on sign-in, on request and after status changes. AI analysis is planned.
+
+Configure the three distinct API tokens described above and a separate `DASHBOARD_PASSWORD` of at least 32 characters. Generate a password with `openssl rand -hex 32` and set it in the ignored local `.dev.vars` file. For production, use `npx wrangler secret put DASHBOARD_PASSWORD`.
+
+Apply local migrations with `npx wrangler d1 migrations apply edgeguard-db --local`, then run `npm run dev -- --local-protocol https` and open the printed HTTPS address followed by `/dashboard`. Wrangler uses a self-signed certificate locally.
+
+This dashboard is intended for one operator. API tokens stay on the server. The signed session cookie uses HttpOnly, Secure and SameSite=Strict and expires after eight hours. Writes require a matching origin and sign-in attempts are rate limited by IP. Signing out clears the browser cookie. Rotating the dashboard password invalidates all sessions. Individual accounts and per-user auditing are not implemented.
