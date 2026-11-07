@@ -1,3 +1,4 @@
+import { analyse } from './analysis';
 import { handleDashboard } from "./dashboard";
 import {
     hashEventInput,
@@ -31,6 +32,8 @@ import { retryPendingEvents } from "./delivery";
 import { readJsonBody } from "./body";
 
 export interface Env {
+    AI?: Ai;
+    AI_GATEWAY_ID?: string;
     DASHBOARD_PASSWORD?: string;
     edgeguard_db: D1Database;
     EVENTS_QUEUE: Queue<EventReceivedMessage>;
@@ -119,7 +122,10 @@ const worker = {
                         env.edgeguard_db,
                         event.id,
                         anomaly,
+                        Boolean(env.AI && env.AI_GATEWAY_ID),
                     );
+
+                    if (env.AI && env.AI_GATEWAY_ID) await analyse(env, event.id);
 
                     if (created) {
                         console.log(
@@ -185,6 +191,9 @@ const worker = {
             allowedRoles = ["admin"];
         }
 
+        const retryMatch = method === 'POST' && path.match(/^\/api\/incidents\/([a-zA-Z0-9-]+)\/analysis\/retry$/);
+        if (retryMatch) allowedRoles = ['admin'];
+
         if (allowedRoles !== null) {
             const authResponse = authorizeRequest(
                 request,
@@ -195,6 +204,14 @@ const worker = {
             if (authResponse !== null) {
                 return authResponse;
             }
+        }
+
+        if (retryMatch) {
+            const incident = await env.edgeguard_db.prepare('SELECT event_id FROM incidents WHERE id = ?').bind(retryMatch[1]).first<{event_id: string}>();
+            if (!incident) return Response.json({ error: 'Incident not found.' }, { status: 404 });
+            if (!env.AI || !env.AI_GATEWAY_ID) return Response.json({ error: 'Analysis is not configured.' }, { status: 503 });
+            const claimed = await analyse(env, incident.event_id, true);
+            return claimed ? Response.json({ ok: true }) : Response.json({ error: 'Analysis is not eligible for retry.' }, { status: 409 });
         }
 
         // Dashboard time-series metrics

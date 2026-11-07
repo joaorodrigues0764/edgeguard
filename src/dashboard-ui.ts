@@ -601,8 +601,32 @@ function detail(item) {
         el('h3', 'Rule analysis'),
         el('p', item.reason),
         el('h3', 'AI analysis'),
-        el('p', 'AI analysis is currently unavailable.', 'notice')
+        el('p', ({not_requested: 'Not requested.', pending: 'Pending.', running: 'In progress. Refresh to check.', failed: 'Analysis failed. The rule-created incident is preserved.', complete: 'Complete.'})[item.analysisState], 'notice')
     );
+
+    if (item.analysis) {
+        panel.append(el('p', item.analysis.summary));
+        for (const [heading, values] of [['Possible causes (hypotheses)', item.analysis.possibleCauses], ['Suggested next steps', item.analysis.suggestedNextSteps]]) {
+            const list = el('ul');
+            for (const value of values) list.append(el('li', value));
+            panel.append(el('h3', heading), list);
+        }
+    }
+    if (item.analysisState === 'failed') {
+        const retry = el('button', 'Retry analysis');
+        retry.onclick = async () => {
+            retry.disabled = true;
+            try {
+                await api('api/incidents/' + encodeURIComponent(item.id) + '/analysis/retry', {method: 'POST'});
+                await loadIncidents();
+            } catch (error) {
+                message(error.message);
+            } finally {
+                retry.disabled = false;
+            }
+        };
+        panel.append(retry);
+    }
 
     const button = el('button', item.status === 'open' ? 'Mark as resolved' : 'Reopen incident', 'primary');
 

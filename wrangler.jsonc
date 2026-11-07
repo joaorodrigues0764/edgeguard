@@ -3,6 +3,8 @@
 	"name": "edgeguard",
 	"main": "src/index.ts",
 	"compatibility_date": "2026-10-01",
+	"ai": { "binding": "AI", "remote": true },
+	"vars": { "AI_GATEWAY_ID": "default" },
 	"triggers": {
 		"crons": ["* * * * *"]
 	},

@@ -112,7 +112,8 @@ async function route(request: Request, env: Env, api: (request: Request) => Prom
     }
 
     const read = request.method === 'GET' && ['/dashboard/api/metrics', '/dashboard/api/metrics/timeseries', '/dashboard/api/incidents'].includes(path);
-    const write = request.method === 'PATCH' && /^\/dashboard\/api\/incidents\/[a-zA-Z0-9-]+$/.test(path);
+    const retry = request.method === 'POST' && /^\/dashboard\/api\/incidents\/[a-zA-Z0-9-]+\/analysis\/retry$/.test(path);
+    const write = retry || request.method === 'PATCH' && /^\/dashboard\/api\/incidents\/[a-zA-Z0-9-]+$/.test(path);
     if (!read && !write) {
         return json('Not Found', 404);
     }
