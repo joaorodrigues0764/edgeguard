@@ -91,10 +91,7 @@ const worker = {
             const body: unknown = message.body;
 
             if (!isEventReceivedMessage(body)) {
-                console.warn(
-                    "Discarding invalid queue message:",
-                    JSON.stringify(body),
-                );
+                console.warn(`Discarding invalid queue message ${message.id}`);
 
                 message.ack();
                 continue;
@@ -137,7 +134,7 @@ const worker = {
                 message.ack();
             } catch (error) {
                 console.error(
-                    `Failed to process event ${body.eventId}:`,
+                    `Failed to process event ${body.eventId} (message ${message.id}, attempt ${message.attempts}):`,
                     error,
                 );
 

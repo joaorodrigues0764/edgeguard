@@ -3,6 +3,7 @@ import {
     createExecutionContext,
     createMessageBatch,
     getQueueResult,
+    type MessageBatchMessage,
 } from "cloudflare:test";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import worker, { type Env } from "../src/index";
@@ -1792,27 +1793,19 @@ describe("Anomaly detection", () => {
     });
 });
 
-async function processQueueMessage(
-    eventId: string,
-    messageId: string,
-    attempts = 1,
-) {
-    const batch = createMessageBatch("edgeguard-events", [
-        {
-            id: messageId,
-            timestamp: new Date(1000),
-            attempts,
-            body: {
-                type: "event.received",
-                eventId,
-            },
-        },
-    ]);
+function eventMessage(eventId: string, id: string, attempts = 1) {
+    return { id, timestamp: new Date(1000), attempts, body: { type: "event.received", eventId } };
+}
 
+async function processQueueBatch(messages: MessageBatchMessage[], config: Env = env) {
+    const batch = createMessageBatch("edgeguard-events", messages);
     const context = createExecutionContext();
-    await worker.queue(batch, env, context);
-
+    await worker.queue(batch, config, context);
     return getQueueResult(batch, context);
+}
+
+function processQueueMessage(eventId: string, messageId: string, attempts = 1) {
+    return processQueueBatch([eventMessage(eventId, messageId, attempts)]);
 }
 
 describe("Queue consumer", () => {
@@ -1916,5 +1909,68 @@ describe("Queue consumer", () => {
             .first<{ count: number }>();
 
         expect(result?.count).toBe(1);
+    });
+
+    it("acknowledges malformed messages and missing events independently", async () => {
+        const result = await processQueueBatch([
+            { id: "invalid", timestamp: new Date(), attempts: 1, body: { invalid: 1n } },
+            eventMessage("missing-event", "orphan"),
+        ]);
+        expect(result.explicitAcks).toEqual(["invalid", "orphan"]);
+        expect(result.retryMessages).toEqual([]);
+    });
+
+    it("retries only the failed insert in a batch and recovers on redelivery", async () => {
+        const db = env.edgeguard_db;
+        const input = { method: "GET", path: "/batch", status: 503, latencyMs: 100 };
+        const first = await insertEvent(db, input);
+        const second = await insertEvent(db, input);
+        const third = await insertEvent(db, { ...input, status: 429 });
+        const messages = [eventMessage(first.id, "first"), eventMessage(second.id, "second"), eventMessage(third.id, "third")];
+
+        // A constraint other than the event ID must surface as a processing failure.
+        await db.prepare("CREATE UNIQUE INDEX inject_conflict ON incidents(severity)").run();
+        try {
+            const result = await processQueueBatch(messages);
+            expect(result.explicitAcks).toEqual(["first", "third"]);
+            expect(result.retryMessages).toEqual([{ msgId: "second" }]);
+            expect(await db.prepare("SELECT id FROM incidents WHERE event_id = ?").bind(second.id).first()).toBeNull();
+        } finally {
+            await db.prepare("DROP INDEX inject_conflict").run();
+        }
+
+        const retried = await processQueueMessage(second.id, "second", 2);
+        expect(retried.explicitAcks).toEqual(["second"]);
+        expect(await db.prepare("SELECT COUNT(*) FROM incidents").first("COUNT(*)")).toBe(3);
+    });
+
+    it("recovers a failed analysis write after the claim expires without duplicating the incident", async () => {
+        const db = env.edgeguard_db;
+        const event = await insertEvent(db, { method: "GET", path: "/triage", status: 503, latencyMs: 100 });
+        const run = vi.fn().mockRejectedValue(new Error("Gateway unavailable"));
+        const config = { ...env, AI: { run } as unknown as Ai, AI_GATEWAY_ID: "test" };
+        const deliver = (attempt: number) => processQueueBatch([eventMessage(event.id, "triage", attempt)], config);
+        const state = db.prepare("SELECT id, analysis_state FROM incidents WHERE event_id = ?").bind(event.id);
+
+        await db.prepare(`CREATE TRIGGER reject_analysis_write BEFORE UPDATE ON incidents
+            WHEN NEW.analysis_state = 'failed' BEGIN SELECT RAISE(ABORT, 'injected D1 failure'); END`).run();
+        try {
+            const result = await deliver(1);
+            expect(result.explicitAcks).toEqual([]);
+            expect(result.retryMessages).toEqual([{ msgId: "triage" }]);
+        } finally {
+            await db.prepare("DROP TRIGGER reject_analysis_write").run();
+        }
+
+        const claimed = await state.first<{ id: string; analysis_state: string }>();
+        expect(claimed?.analysis_state).toBe("running");
+        // Model the consumer's configured retry delay without waiting a minute in CI.
+        await db.prepare("UPDATE incidents SET analysis_expires_at = 0 WHERE event_id = ?").bind(event.id).run();
+        const retried = await deliver(2);
+        expect(retried.explicitAcks).toEqual(["triage"]);
+        expect(retried.retryMessages).toEqual([]);
+        expect(await state.first()).toEqual({ id: claimed!.id, analysis_state: "failed" });
+        await deliver(3);
+        expect(run).toHaveBeenCalledTimes(2);
     });
 });

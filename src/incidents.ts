@@ -59,7 +59,7 @@ export async function createIncident(
 ): Promise<boolean> {
     const result = await db
         .prepare(`
-            INSERT OR IGNORE INTO incidents (
+            INSERT INTO incidents (
                 id,
                 event_id,
                 severity,
@@ -68,6 +68,7 @@ export async function createIncident(
                 created_at, analysis_state
             )
             VALUES (?, ?, ?, ?, 'open', ?, ?)
+            ON CONFLICT(event_id) DO NOTHING
         `)
         .bind(
             crypto.randomUUID(),

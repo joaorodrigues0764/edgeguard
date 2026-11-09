@@ -25,7 +25,7 @@ The demo uses a deterministic **fixture** instead of a hosted model. The banner 
 
 - **Event ingestion:** validate and store application events using Cloudflare Workers and D1.
 - **Asynchronous processing:** publish events to Cloudflare Queues and analyse them in a queue consumer.
-- **Delivery recovery:** retry stored events whose initial queue publication failed, using a scheduled recovery job.
+- **Delivery recovery:** a scheduled job republishes pending events. A dead-letter queue retains messages that exhaust consumer retries for operator review.
 - **Anomaly detection:** identify server errors, rate-limited responses, and high-latency requests.
 - **Incident management:** create incidents with severity levels, prevent duplicate incidents for the same event, and update incident status.
 - **Operational metrics:** calculate event counts, server-error counts, rate-limited responses, average latency, and incident statistics.
@@ -45,6 +45,7 @@ flowchart TD
     Worker -->|Event ID| Queue[Cloudflare Queues]
     Cron[Scheduled recovery] -->|Republish pending events| Queue
     Queue --> Rules[Deterministic anomaly rules]
+    Queue -->|Consumer retries exhausted| DLQ[edgeguard-events-dlq]
     Rules -->|Insert unique incident first| D1
     Rules -->|Claim analysis in D1| Analysis[Analysis worker code]
     Analysis -->|Status and latency| Gateway[AI Gateway]
@@ -69,6 +70,16 @@ flowchart TD
 Incident creation is idempotent for each event: the database prevents duplicate incidents for the same event.
 
 A Cron Trigger runs every minute and republishes up to 50 pending events that are at least one minute old, including events submitted without an idempotency key. Events are marked as sent only after the queue confirms publication. A crash between publication and the database update may cause duplicate delivery; the consumer's unique event constraint prevents duplicate incidents.
+
+`queue_status = 'sent'` records successful publication. Once the message is in the queue, the consumer decides the outcome for each message in the batch.
+
+| Consumer outcome | What happens |
+|---|---|
+| Malformed message or event ID absent from D1 after a successful lookup | Log a warning and acknowledge. The producer persists the event before publishing its ID. |
+| Healthy event or successfully handled anomaly | Acknowledge. Redelivery reuses the incident for that event and skips a completed analysis. |
+| AI provider error, timeout or invalid response | Store the failed analysis and acknowledge. An administrator can retry the analysis on the same incident. |
+| D1 read or write throws, including while saving an analysis result | Retry the affected message. The 60-second retry delay gives an interrupted analysis claim time to expire. A new attempt may repeat the inference. |
+| Processing still fails after the initial delivery and three retries | Cloudflare routes the message to `edgeguard-events-dlq` for inspection and manual recovery. |
 
 ## Technology stack
 
@@ -305,11 +316,30 @@ Deployment also installs the configured Cron Trigger. Scheduled recovery can be 
 
 A successful local test run does not by itself establish that the production resources have been configured or that the Worker has been deployed.
 
+### Dead-letter queue operations
+
+The consumer configuration names `edgeguard-events-dlq` as the destination for exhausted messages. At deployment, Cloudflare can create it in the same jurisdiction as `edgeguard-events`. If provisioning it separately, create a queue with that exact name in the source queue's jurisdiction. Leave it without an automatic consumer. After deployment, verify the DLQ destination and retry settings on the source consumer and check the retention period on the DLQ. Messages expire at the end of that period. [Cloudflare DLQ configuration](https://developers.cloudflare.com/queues/configuration/dead-letter-queues/) · [Queue limits and retention](https://developers.cloudflare.com/queues/platform/limits/)
+
+1. In the Cloudflare dashboard, select **Queues → edgeguard-events-dlq → Messages → List**. Correlate the event ID with the Worker error logs and the D1 event and incident. Inspect messages before retention expires. [Preview messages](https://developers.cloudflare.com/queues/examples/list-messages-from-dash/)
+2. Correct the processing failure. For a valid event that still needs processing, send `{"type":"event.received","eventId":"<original D1 event ID>"}` as **JSON** to `edgeguard-events`. This replays the existing event through the consumer. [Send a queue message](https://developers.cloudflare.com/queues/examples/send-messages-from-dash/)
+3. Confirm processing succeeded before acknowledging the selected DLQ copy. For an anomalous event, verify the incident for the original event ID and its analysis state. A persisted `failed` analysis can be retried through the administrator endpoint.
+
+To verify hosted routing in isolated staging, install the following temporary trigger in its D1 database before submitting a synthetic HTTP 503 event with the path `/synthetic/dlq-check`.
+
+```sql
+CREATE TRIGGER fail_dlq_check BEFORE INSERT ON incidents
+WHEN EXISTS (SELECT 1 FROM events WHERE id = NEW.event_id AND path = '/synthetic/dlq-check')
+BEGIN
+    SELECT RAISE(ABORT, 'injected staging failure');
+END;
+```
+
+Confirm the event is marked `sent` and look for attempts 1–4 in the Worker logs. Once the message appears in the DLQ, run `DROP TRIGGER fail_dlq_check` in staging and follow the replay steps above. Expect one incident for the original event ID. Remove the trigger even if the check is interrupted.
+
 ## Design notes and limitations
 
 - Metrics are calculated from the events and incidents stored in D1.
 - `/api/metrics/telemetry` separately queries Analytics Engine through Analytics SQL; its rolling time window differs from the calendar-hour buckets used by `/api/metrics/timeseries`.
-- Recovery covers pending queue publication. Once publication succeeds, consumer processing follows the queue's retry and retention configuration; no dead-letter queue is currently configured.
 - `rateLimitedResponses` in the dashboard metrics counts observed application events with HTTP status `429`. Requests rejected by EdgeGuard's own ingestion rate limiter are recorded separately in Analytics Engine and are not included in the D1 event total.
 - Time-series timestamps represent the start of each hour in Unix milliseconds.
 - The ingestion rate limiter is keyed by the connecting client IP address.
