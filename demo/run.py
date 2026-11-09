@@ -1,4 +1,5 @@
 """Start an isolated, disposable portfolio demo from the project root."""
+
 import json
 import os
 from pathlib import Path
@@ -25,14 +26,19 @@ with tempfile.TemporaryDirectory(prefix='edgeguard-demo-') as directory:
     config['d1_databases'][0]['migrations_dir'] = str(ROOT / 'migrations')
     config['secrets']['required'].append('DASHBOARD_PASSWORD')
     if LIVE:
-        config.update(ai={'binding': 'AI', 'remote': True}, vars={'AI_GATEWAY_ID': os.getenv('AI_GATEWAY_ID', 'default')})
+        config.update(
+            ai={'binding': 'AI', 'remote': True},
+            vars={'AI_GATEWAY_ID': os.getenv('AI_GATEWAY_ID', 'default')},
+        )
     credentials = {key: secrets.token_hex(24) for key in config['secrets']['required']}
     (base / '.dev.vars').write_text(''.join(f'{k}={v}\n' for k, v in credentials.items()))
     settings = base / 'wrangler.json'
     settings.write_text(json.dumps(config))
     common = ['--config', str(settings), '--persist-to', str(base / 'state')]
+
     def wrangler(*args):
         subprocess.run([CLI, *args, *common], cwd=base, check=True)
+
     wrangler('d1', 'migrations', 'apply', 'edgeguard-db', '--local')
     # A deterministic shape relative to the current hour, including empty buckets.
     counts = [2, 0, 1, 3, 0, 5, 3, 2, 0, 4, 7, 2, 1, 0, 3, 4, 6, 2, 1, 0, 2, 4, 3, 1]
@@ -61,7 +67,10 @@ with tempfile.TemporaryDirectory(prefix='edgeguard-demo-') as directory:
                 f"{sample_status},{latency},'synthetic-demo',{now},'sent')"
             )
     seed = base / 'seed.sql'
-    seed.write_text('INSERT INTO events (id,occurred_at,method,path,status,latency_ms,client_id,created_at,queue_status) VALUES ' + ','.join(rows) + ';')
+    seed.write_text(
+        'INSERT INTO events (id,occurred_at,method,path,status,latency_ms,'
+        'client_id,created_at,queue_status) VALUES ' + ','.join(rows) + ';'
+    )
     wrangler('d1', 'execute', 'edgeguard-db', '--local', '--file', str(seed))
     # Check the port before sending any requests to it.
     import socket
@@ -81,11 +90,26 @@ with tempfile.TemporaryDirectory(prefix='edgeguard-demo-') as directory:
         else:
             sys.exit('Local Worker did not become ready.')
         for path, status, latency, _ in examples:
-            data = json.dumps(dict(method='GET', path='/synthetic/' + path, status=status, latencyMs=latency, clientId='synthetic-demo')).encode()
-            headers = {'Authorization': 'Bearer ' + credentials['INGEST_API_TOKEN'], 'Content-Type': 'application/json'}
+            payload = {
+                'method': 'GET',
+                'path': '/synthetic/' + path,
+                'status': status,
+                'latencyMs': latency,
+                'clientId': 'synthetic-demo',
+            }
+            data = json.dumps(payload).encode()
+            headers = {
+                'Authorization': 'Bearer ' + credentials['INGEST_API_TOKEN'],
+                'Content-Type': 'application/json',
+            }
             with urllib.request.urlopen(urllib.request.Request(URL + '/api/events', data, headers)) as res:
                 assert res.status == 201
-        print(f'\nDashboard: {URL}/dashboard\nTemporary dashboard password: {credentials["DASHBOARD_PASSWORD"]}\nPress Ctrl+C to discard the demo.', flush=True)
+        print(
+            f'\nDashboard: {URL}/dashboard\n'
+            f'Temporary dashboard password: {credentials["DASHBOARD_PASSWORD"]}\n'
+            'Press Ctrl+C to discard the demo.',
+            flush=True,
+        )
         proc.wait()
     except KeyboardInterrupt:
         pass

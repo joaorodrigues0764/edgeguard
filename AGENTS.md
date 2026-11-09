@@ -11,11 +11,11 @@ For all limits and quotas, retrieve from the product's `/platform/limits/` page.
 
 ## Commands
 
-| Command | Purpose |
-|---------|---------|
-| `npx wrangler dev` | Local development |
-| `npx wrangler deploy` | Deploy to Cloudflare |
-| `npx wrangler types` | Generate TypeScript types |
+| Command               | Purpose                   |
+| --------------------- | ------------------------- |
+| `npx wrangler dev`    | Local development         |
+| `npx wrangler deploy` | Deploy to Cloudflare      |
+| `npx wrangler types`  | Generate TypeScript types |
 
 Run `wrangler types` after changing bindings in wrangler.jsonc.
 
@@ -25,16 +25,16 @@ When running `npx wrangler dev`, a Local Explorer API is available for inspectin
 
 Key endpoints (relative to the dev server URL):
 
-| Endpoint | Description |
-|----------|-------------|
-| `GET /cdn-cgi/local/explorer/api/local/workers` | List local Workers and their bindings |
-| `GET /cdn-cgi/local/explorer/api/storage/kv/namespaces` | List KV namespaces |
-| `GET /cdn-cgi/local/explorer/api/d1/database` | List D1 databases |
-| `GET /cdn-cgi/local/explorer/api/r2/buckets` | List R2 buckets |
-| `GET /cdn-cgi/local/explorer/api/workers/durable_objects/namespaces` | List Durable Object namespaces |
-| `GET /cdn-cgi/local/explorer/api/workflows` | List Workflows |
-| `POST /cdn-cgi/local/explorer/api/local/observability/query` | Run a read-only SQL query (SELECT/WITH only) over captured request traces and console logs. Tables: `spans`, `logs` (read attributes via `json(attributes)`). Example: `curl -X POST <base>/cdn-cgi/local/explorer/api/local/observability/query -H 'Content-Type: application/json' -d '{"sql":"SELECT service, name, outcome, duration_ms FROM spans WHERE parent_id IS NULL LIMIT 20"}'` |
-| `POST /cdn-cgi/local/explorer/api/local/observability/clear` | Clear all captured traces and logs |
+| Endpoint                                                             | Description                                                                                                                                                                                                                                                                                                                                                                                 |
+| -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /cdn-cgi/local/explorer/api/local/workers`                      | List local Workers and their bindings                                                                                                                                                                                                                                                                                                                                                       |
+| `GET /cdn-cgi/local/explorer/api/storage/kv/namespaces`              | List KV namespaces                                                                                                                                                                                                                                                                                                                                                                          |
+| `GET /cdn-cgi/local/explorer/api/d1/database`                        | List D1 databases                                                                                                                                                                                                                                                                                                                                                                           |
+| `GET /cdn-cgi/local/explorer/api/r2/buckets`                         | List R2 buckets                                                                                                                                                                                                                                                                                                                                                                             |
+| `GET /cdn-cgi/local/explorer/api/workers/durable_objects/namespaces` | List Durable Object namespaces                                                                                                                                                                                                                                                                                                                                                              |
+| `GET /cdn-cgi/local/explorer/api/workflows`                          | List Workflows                                                                                                                                                                                                                                                                                                                                                                              |
+| `POST /cdn-cgi/local/explorer/api/local/observability/query`         | Run a read-only SQL query (SELECT/WITH only) over captured request traces and console logs. Tables: `spans`, `logs` (read attributes via `json(attributes)`). Example: `curl -X POST <base>/cdn-cgi/local/explorer/api/local/observability/query -H 'Content-Type: application/json' -d '{"sql":"SELECT service, name, outcome, duration_ms FROM spans WHERE parent_id IS NULL LIMIT 20"}'` |
+| `POST /cdn-cgi/local/explorer/api/local/observability/clear`         | Clear all captured traces and logs                                                                                                                                                                                                                                                                                                                                                          |
 
 If the routes above don't cover what you need, fetch the full OpenAPI schema (large - use only as a last resort): `GET /cdn-cgi/local/explorer/api`
 
@@ -60,3 +60,10 @@ If the application uses Durable Objects or Workflows, refer to the relevant best
 
 - Durable Objects: https://developers.cloudflare.com/durable-objects/best-practices/rules-of-durable-objects/
 - Workflows: https://developers.cloudflare.com/workflows/build/rules-of-workflows/
+
+## Code readability
+
+- Use braces for every TypeScript or JavaScript conditional and loop body, including in tests and embedded scripts.
+- Follow the repository Prettier configuration. Expand multi-field fixtures, complex calls and table-driven test cases across lines so inputs and expectations can be read together.
+- Separate setup, actions and assertions with blank lines. Give intermediate results a name when it clarifies nested asynchronous operations.
+- Preserve language conventions for Python and SQL. Remove trailing whitespace and end text files with a newline.

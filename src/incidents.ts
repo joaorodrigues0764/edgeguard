@@ -1,30 +1,30 @@
 import { validated, type Analysis } from './analysis';
-import type { WindowEvidence } from "./anomaly";
+import type { WindowEvidence } from './anomaly';
 
-export type IncidentSeverity = "medium" | "high" | "critical";
-export type IncidentStatus = "open" | "resolved";
+export type IncidentSeverity = 'medium' | 'high' | 'critical';
+export type IncidentStatus = 'open' | 'resolved';
 
 export interface IncidentFilters {
-    limit: number;
-    severity?: IncidentSeverity;
-    status?: IncidentStatus;
+	limit: number;
+	severity?: IncidentSeverity;
+	status?: IncidentStatus;
 }
 
 export interface IncidentRecord {
-    id: string;
-    eventId: string;
-    severity: IncidentSeverity;
-    reason: string;
-    status: IncidentStatus;
-    createdAt: number;
-    eventMethod: string;
-    eventPath: string;
-    eventStatus: number;
-    eventLatencyMs: number;
-    eventOccurredAt: number;
-    analysisState: 'not_requested' | 'pending' | 'running' | 'complete' | 'failed';
-    analysis: Analysis | null;
-    evidence: WindowEvidence | null;
+	id: string;
+	eventId: string;
+	severity: IncidentSeverity;
+	reason: string;
+	status: IncidentStatus;
+	createdAt: number;
+	eventMethod: string;
+	eventPath: string;
+	eventStatus: number;
+	eventLatencyMs: number;
+	eventOccurredAt: number;
+	analysisState: 'not_requested' | 'pending' | 'running' | 'complete' | 'failed';
+	analysis: Analysis | null;
+	evidence: WindowEvidence | null;
 }
 
 export function getDetectionResult(db: D1Database, eventId: string) {
@@ -43,35 +43,30 @@ export function getDetectionResult(db: D1Database, eventId: string) {
 }
 
 export async function createIncident(
-    db: D1Database,
-    eventId: string,
-    anomaly: { severity: IncidentSeverity; reason: string },
-    requestAnalysis = false,
+	db: D1Database,
+	eventId: string,
+	anomaly: { severity: IncidentSeverity; reason: string },
+	requestAnalysis = false,
 ): Promise<boolean> {
-    const result = await db
-        .prepare(`
-            INSERT INTO incidents (
-                id,
-                event_id,
-                severity,
-                reason,
-                status,
-                created_at, analysis_state
-            )
-            VALUES (?, ?, ?, ?, 'open', ?, ?)
-            ON CONFLICT(event_id) DO NOTHING
-        `)
-        .bind(
-            crypto.randomUUID(),
-            eventId,
-            anomaly.severity,
-            anomaly.reason,
-            Date.now(),
-            requestAnalysis ? 'pending' : 'not_requested',
-        )
-        .run();
+	const result = await db
+		.prepare(
+			`
+				INSERT INTO incidents (
+				    id,
+				    event_id,
+				    severity,
+				    reason,
+				    status,
+				    created_at, analysis_state
+				)
+				VALUES (?, ?, ?, ?, 'open', ?, ?)
+				ON CONFLICT(event_id) DO NOTHING
+			`,
+		)
+		.bind(crypto.randomUUID(), eventId, anomaly.severity, anomaly.reason, Date.now(), requestAnalysis ? 'pending' : 'not_requested')
+		.run();
 
-    return result.meta.changes > 0;
+	return result.meta.changes > 0;
 }
 
 const incidentSelect = `
@@ -107,61 +102,56 @@ function present({ analysisJson, evidenceJson, ...row }: StoredIncident): Incide
 	};
 }
 
-export async function listIncidents(
-    db: D1Database,
-    filters: IncidentFilters,
-): Promise<IncidentRecord[]> {
-    const conditions: string[] = [];
-    const bindings: Array<string | number> = [];
+export async function listIncidents(db: D1Database, filters: IncidentFilters): Promise<IncidentRecord[]> {
+	const conditions: string[] = [];
+	const bindings: Array<string | number> = [];
 
-    if (filters.severity !== undefined) {
-        conditions.push("i.severity = ?");
-        bindings.push(filters.severity);
-    }
+	if (filters.severity !== undefined) {
+		conditions.push('i.severity = ?');
+		bindings.push(filters.severity);
+	}
 
-    if (filters.status !== undefined) {
-        conditions.push("i.status = ?");
-        bindings.push(filters.status);
-    }
+	if (filters.status !== undefined) {
+		conditions.push('i.status = ?');
+		bindings.push(filters.status);
+	}
 
-    let query = incidentSelect;
-    if (conditions.length > 0) {
-        query += ` WHERE ${conditions.join(" AND ")}`;
-    }
+	let query = incidentSelect;
+	if (conditions.length > 0) {
+		query += ` WHERE ${conditions.join(' AND ')}`;
+	}
 
-    query += " ORDER BY i.created_at DESC LIMIT ?";
-    bindings.push(filters.limit);
+	query += ' ORDER BY i.created_at DESC LIMIT ?';
+	bindings.push(filters.limit);
 
-    const result = await db
-        .prepare(query)
-        .bind(...bindings)
-        .all<StoredIncident>();
+	const result = await db
+		.prepare(query)
+		.bind(...bindings)
+		.all<StoredIncident>();
 
-    return result.results.map(present);
+	return result.results.map(present);
 }
 
-export async function updateIncidentStatus(
-    db: D1Database,
-    incidentId: string,
-    status: IncidentStatus,
-): Promise<IncidentRecord | null> {
-    const result = await db
-        .prepare(`
-            UPDATE incidents
-            SET status = ?
-            WHERE id = ?
-        `)
-        .bind(status, incidentId)
-        .run();
+export async function updateIncidentStatus(db: D1Database, incidentId: string, status: IncidentStatus): Promise<IncidentRecord | null> {
+	const result = await db
+		.prepare(
+			`
+				UPDATE incidents
+				SET status = ?
+				WHERE id = ?
+			`,
+		)
+		.bind(status, incidentId)
+		.run();
 
-    if (result.meta.changes === 0) {
-        return null;
-    }
+	if (result.meta.changes === 0) {
+		return null;
+	}
 
-    const incident = await db
-        .prepare(incidentSelect + ' WHERE i.id = ?')
-        .bind(incidentId)
-        .first<StoredIncident>();
+	const incident = await db
+		.prepare(incidentSelect + ' WHERE i.id = ?')
+		.bind(incidentId)
+		.first<StoredIncident>();
 
-    return incident ? present(incident) : null;
+	return incident ? present(incident) : null;
 }

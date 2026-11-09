@@ -107,42 +107,42 @@ A Cron Trigger runs every minute and republishes up to 50 pending events that ar
 
 `queue_status = 'sent'` records successful publication. Once the message is in the queue, the consumer decides the outcome for each message in the batch.
 
-| Consumer outcome | What happens |
-|---|---|
-| Malformed message or event ID absent from D1 after a successful lookup | Log a warning and acknowledge. The producer persists the event before publishing its ID. |
-| Healthy event or successfully handled anomaly | Acknowledge. Redelivery reuses the incident for that event and skips a completed analysis. |
-| AI provider error, timeout or invalid response | Store the failed analysis and acknowledge. An administrator can retry the analysis on the same incident. |
-| D1 read or write throws, including while saving an analysis result | Retry the affected message. The 60-second retry delay gives an interrupted analysis claim time to expire. A new attempt may repeat the inference. |
-| Processing still fails after the initial delivery and three retries | Cloudflare routes the message to `edgeguard-events-dlq` for inspection and manual recovery. |
+| Consumer outcome                                                       | What happens                                                                                                                                      |
+| ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Malformed message or event ID absent from D1 after a successful lookup | Log a warning and acknowledge. The producer persists the event before publishing its ID.                                                          |
+| Healthy event or successfully handled anomaly                          | Acknowledge. Redelivery reuses the incident for that event and skips a completed analysis.                                                        |
+| AI provider error, timeout or invalid response                         | Store the failed analysis and acknowledge. An administrator can retry the analysis on the same incident.                                          |
+| D1 read or write throws, including while saving an analysis result     | Retry the affected message. The 60-second retry delay gives an interrupted analysis claim time to expire. A new attempt may repeat the inference. |
+| Processing still fails after the initial delivery and three retries    | Cloudflare routes the message to `edgeguard-events-dlq` for inspection and manual recovery.                                                       |
 
 ## Technology stack
 
-| Technology | Purpose |
-|---|---|
-| TypeScript | Application and API implementation |
-| Cloudflare Workers | Serverless API and queue consumer |
-| Cloudflare D1 | Event and incident persistence |
-| Cloudflare Queues | Asynchronous event processing |
-| Cloudflare Analytics Engine | Event and rate-limited ingestion telemetry |
-| Cloudflare Rate Limiting | Protect event ingestion |
-| Wrangler | Local development and Cloudflare configuration |
-| Vitest | Automated tests |
+| Technology                  | Purpose                                        |
+| --------------------------- | ---------------------------------------------- |
+| TypeScript                  | Application and API implementation             |
+| Cloudflare Workers          | Serverless API and queue consumer              |
+| Cloudflare D1               | Event and incident persistence                 |
+| Cloudflare Queues           | Asynchronous event processing                  |
+| Cloudflare Analytics Engine | Event and rate-limited ingestion telemetry     |
+| Cloudflare Rate Limiting    | Protect event ingestion                        |
+| Wrangler                    | Local development and Cloudflare configuration |
+| Vitest                      | Automated tests                                |
 
 ## API reference
 
 All protected endpoints require a Bearer token. Health and dashboard sign-in assets are public; dashboard data requires a session.
 
-| Method | Endpoint | Permission |
-|---|---|---|
-| `GET` | `/health` | Public |
-| `POST` | `/api/events` | Ingestion |
-| `GET` | `/api/events?limit=20` | Dashboard or administrator |
-| `GET` | `/api/incidents?limit=20` | Dashboard or administrator |
-| `PATCH` | `/api/incidents/:id` | Administrator |
-| `POST` | `/api/incidents/:id/analysis/retry` | Administrator; failed or expired attempt only |
-| `GET` | `/api/metrics` | Dashboard or administrator |
-| `GET` | `/api/metrics/timeseries?hours=24` | Dashboard or administrator |
-| `GET` | `/api/metrics/telemetry?hours=24` | Dashboard or administrator |
+| Method  | Endpoint                            | Permission                                    |
+| ------- | ----------------------------------- | --------------------------------------------- |
+| `GET`   | `/health`                           | Public                                        |
+| `POST`  | `/api/events`                       | Ingestion                                     |
+| `GET`   | `/api/events?limit=20`              | Dashboard or administrator                    |
+| `GET`   | `/api/incidents?limit=20`           | Dashboard or administrator                    |
+| `PATCH` | `/api/incidents/:id`                | Administrator                                 |
+| `POST`  | `/api/incidents/:id/analysis/retry` | Administrator; failed or expired attempt only |
+| `GET`   | `/api/metrics`                      | Dashboard or administrator                    |
+| `GET`   | `/api/metrics/timeseries?hours=24`  | Dashboard or administrator                    |
+| `GET`   | `/api/metrics/telemetry?hours=24`   | Dashboard or administrator                    |
 
 ### Authentication
 
@@ -154,11 +154,11 @@ Authorization: Bearer YOUR_API_TOKEN
 
 The API uses three independently configured tokens:
 
-| Secret | Access |
-|---|---|
-| `INGEST_API_TOKEN` | Submit events |
-| `DASHBOARD_API_TOKEN` | Read events, incidents, and metrics |
-| `ADMIN_API_TOKEN` | Read operational data and update incident status |
+| Secret                | Access                                           |
+| --------------------- | ------------------------------------------------ |
+| `INGEST_API_TOKEN`    | Submit events                                    |
+| `DASHBOARD_API_TOKEN` | Read events, incidents, and metrics              |
+| `ADMIN_API_TOKEN`     | Read operational data and update incident status |
 
 A request without valid credentials returns `401 Unauthorized`. A valid token without permission for the requested endpoint returns `403 Forbidden`.
 
@@ -187,13 +187,13 @@ curl -X POST http://localhost:8787/api/events \
 
 The event payload contains:
 
-| Field | Description |
-|---|---|
-| `method` | HTTP method |
-| `path` | Application request path |
-| `status` | HTTP status code, from 100 to 599 |
-| `latencyMs` | Request latency in milliseconds |
-| `clientId` | Optional client identifier |
+| Field       | Description                       |
+| ----------- | --------------------------------- |
+| `method`    | HTTP method                       |
+| `path`      | Application request path          |
+| `status`    | HTTP status code, from 100 to 599 |
+| `latencyMs` | Request latency in milliseconds   |
+| `clientId`  | Optional client identifier        |
 
 Successful ingestion returns `201 Created`. Invalid JSON or an invalid payload returns `400 Bad Request`.
 

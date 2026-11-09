@@ -512,89 +512,94 @@ footer {
 `;
 
 export const dashboardScript = String.raw`
-const $ = id => document.getElementById(id);
+const $ = (id) => document.getElementById(id);
 
 const labels = {
-    critical: 'Critical',
-    high: 'High',
-    medium: 'Medium',
-    open: 'Open',
-    resolved: 'Resolved'
+	critical: 'Critical',
+	high: 'High',
+	medium: 'Medium',
+	open: 'Open',
+	resolved: 'Resolved',
 };
 
 let incidents = [],
-    selected = null,
-    generation = 0;
+	selected = null,
+	generation = 0;
 
-const number = value => new Intl.NumberFormat('en-GB', { maximumFractionDigits: 1 }).format(value);
-const date = value => new Date(value).toLocaleString('en-GB');
+const number = (value) => new Intl.NumberFormat('en-GB', { maximumFractionDigits: 1 }).format(value);
+const date = (value) => new Date(value).toLocaleString('en-GB');
 
 function el(tag, text, cls) {
-    const node = document.createElement(tag);
-    if (text !== undefined) node.textContent = text;
-    if (cls) node.className = cls;
-    return node;
+	const node = document.createElement(tag);
+	if (text !== undefined) {
+		node.textContent = text;
+	}
+	if (cls) {
+		node.className = cls;
+	}
+	return node;
 }
 
 function message(text = '') {
-    $('message').textContent = text;
+	$('message').textContent = text;
 }
 
 function session(active) {
-    $('login').hidden = active;
-    $('app').hidden = !active;
-    $('logout').hidden = !active;
+	$('login').hidden = active;
+	$('app').hidden = !active;
+	$('logout').hidden = !active;
 
-    if (!active) {
-        generation++;
-        incidents = [];
-        selected = null;
-        $('rows').replaceChildren();
-        $('metrics').replaceChildren();
-        $('chart').replaceChildren();
-        $('detail').replaceChildren(el('h2', 'Select an incident'), el('p', 'Choose View in the incidents table to see the detection rule and event details.'));
-    }
+	if (!active) {
+		generation++;
+		incidents = [];
+		selected = null;
+		$('rows').replaceChildren();
+		$('metrics').replaceChildren();
+		$('chart').replaceChildren();
+		$('detail').replaceChildren(
+			el('h2', 'Select an incident'),
+			el('p', 'Choose View in the incidents table to see the detection rule and event details.'),
+		);
+	}
 }
 
 async function api(path, options = {}) {
-    const response = await fetch('/dashboard/' + path, {
-        credentials: 'same-origin',
-        ...options,
-        headers: { 'Content-Type': 'application/json' }
-    });
+	const response = await fetch('/dashboard/' + path, {
+		credentials: 'same-origin',
+		...options,
+		headers: { 'Content-Type': 'application/json' },
+	});
 
-    const result = await response.json();
+	const result = await response.json();
 
-    if (!response.ok) {
-        if (response.status === 401) session(false);
-        throw new Error(result.error || 'Request failed.');
-    }
+	if (!response.ok) {
+		if (response.status === 401) {
+			session(false);
+		}
+		throw new Error(result.error || 'Request failed.');
+	}
 
-    return result.data ?? result;
+	return result.data ?? result;
 }
 
 function badge(value) {
-    return el('span', labels[value], 'badge ' + value);
+	return el('span', labels[value], 'badge ' + value);
 }
 
 function detail(item) {
-    selected = item.id;
-    const panel = $('detail');
+	selected = item.id;
+	const panel = $('detail');
 
-    panel.replaceChildren(
-        el('p', 'INVESTIGATION', 'eyebrow'),
-        el('h2', item.eventMethod + ' ' + item.eventPath),
-        badge(item.severity)
-    );
+	panel.replaceChildren(el('p', 'INVESTIGATION', 'eyebrow'), el('h2', item.eventMethod + ' ' + item.eventPath), badge(item.severity));
 
-    const dl = el('dl');
-    [
-        ['Status', labels[item.status]],
-        ['HTTP response', item.eventStatus],
-        ['Latency', number(item.eventLatencyMs) + ' ms'],
-        ['Event', date(item.eventOccurredAt)],
-        ['Incident', item.id]
-    ].forEach(([k, v]) => dl.append(el('dt', k), el('dd', v)));
+	const dl = el('dl');
+	[
+		['Status', labels[item.status]],
+		['HTTP response', item.eventStatus],
+		['Latency', number(item.eventLatencyMs) + ' ms'],
+		['Event', date(item.eventOccurredAt)],
+		['Incident', item.id],
+	].forEach(([k, v]) => dl.append(el('dt', k), el('dd', v)));
 
 	if (item.evidence) {
 		const evidence = item.evidence;
@@ -607,243 +612,273 @@ function detail(item) {
 		}
 	}
 
-    panel.append(
-        dl,
-        el('h3', 'Rule analysis'),
-        el('p', item.reason),
-        el('h3', 'AI analysis'),
-        el('p', ({not_requested: 'Not requested.', pending: 'Pending.', running: 'In progress. Refresh to check.', failed: 'Analysis did not complete. You can retry it here.', complete: 'Complete.'})[item.analysisState], 'notice')
-    );
+	panel.append(
+		dl,
+		el('h3', 'Rule analysis'),
+		el('p', item.reason),
+		el('h3', 'AI analysis'),
+		el(
+			'p',
+			{
+				not_requested: 'Not requested.',
+				pending: 'Pending.',
+				running: 'In progress. Refresh to check.',
+				failed: 'Analysis did not complete. You can retry it here.',
+				complete: 'Complete.',
+			}[item.analysisState],
+			'notice',
+		),
+	);
 
-    if (item.analysis) {
-        panel.append(el('p', item.analysis.summary));
-        for (const [heading, values] of [['Possible causes (hypotheses)', item.analysis.possibleCauses], ['Suggested next steps', item.analysis.suggestedNextSteps]]) {
-            const list = el('ul');
-            for (const value of values) list.append(el('li', value));
-            panel.append(el('h3', heading), list);
-        }
-    }
-    if (item.analysisState === 'failed') {
-        const retry = el('button', 'Retry analysis');
-        retry.onclick = async () => {
-            retry.disabled = true;
-            try {
-                await api('api/incidents/' + encodeURIComponent(item.id) + '/analysis/retry', {method: 'POST'});
-                await loadIncidents();
-            } catch (error) {
-                await loadIncidents();
-                message(error.message);
-            } finally {
-                retry.disabled = false;
-            }
-        };
-        panel.append(retry);
-    }
+	if (item.analysis) {
+		panel.append(el('p', item.analysis.summary));
+		for (const [heading, values] of [
+			['Possible causes (hypotheses)', item.analysis.possibleCauses],
+			['Suggested next steps', item.analysis.suggestedNextSteps],
+		]) {
+			const list = el('ul');
+			for (const value of values) {
+				list.append(el('li', value));
+			}
+			panel.append(el('h3', heading), list);
+		}
+	}
+	if (item.analysisState === 'failed') {
+		const retry = el('button', 'Retry analysis');
+		retry.onclick = async () => {
+			retry.disabled = true;
+			try {
+				await api('api/incidents/' + encodeURIComponent(item.id) + '/analysis/retry', { method: 'POST' });
+				await loadIncidents();
+			} catch (error) {
+				await loadIncidents();
+				message(error.message);
+			} finally {
+				retry.disabled = false;
+			}
+		};
+		panel.append(retry);
+	}
 
-    const button = el('button', item.status === 'open' ? 'Mark as resolved' : 'Reopen incident', 'primary');
+	const button = el('button', item.status === 'open' ? 'Mark as resolved' : 'Reopen incident', 'primary');
 
-    button.addEventListener('click', async () => {
-        button.disabled = true;
-        message();
+	button.addEventListener('click', async () => {
+		button.disabled = true;
+		message();
 
-        try {
-            const updated = await api('api/incidents/' + encodeURIComponent(item.id), {
-                method: 'PATCH',
-                body: JSON.stringify({ status: item.status === 'open' ? 'resolved' : 'open' })
-            });
+		try {
+			const updated = await api('api/incidents/' + encodeURIComponent(item.id), {
+				method: 'PATCH',
+				body: JSON.stringify({ status: item.status === 'open' ? 'resolved' : 'open' }),
+			});
 
-            detail(updated);
-            await refresh();
-            message('Status updated.');
-        } catch (error) {
-            message(error.message);
-        } finally {
-            button.disabled = false;
-        }
-    });
+			detail(updated);
+			await refresh();
+			message('Status updated.');
+		} catch (error) {
+			message(error.message);
+		} finally {
+			button.disabled = false;
+		}
+	});
 
-    panel.append(button);
+	panel.append(button);
 }
 
 async function loadIncidents() {
-    const version = ++generation;
-    $('list-status').textContent = 'Loading incidents…';
+	const version = ++generation;
+	$('list-status').textContent = 'Loading incidents…';
 
-    const query = new URLSearchParams({ limit: '100' });
-    for (const name of ['status', 'severity']) {
-        if ($(name).value) query.set(name, $(name).value);
-    }
+	const query = new URLSearchParams({ limit: '100' });
+	for (const name of ['status', 'severity']) {
+		if ($(name).value) {
+			query.set(name, $(name).value);
+		}
+	}
 
-    try {
-        const items = await api('api/incidents?' + query);
-        if (version !== generation) return;
+	try {
+		const items = await api('api/incidents?' + query);
+		if (version !== generation) {
+			return;
+		}
 
-        incidents = items;
-        $('rows').replaceChildren();
+		incidents = items;
+		$('rows').replaceChildren();
 
-        for (const item of items) {
-            const tr = el('tr');
-            const endpoint = el('td', item.eventMethod + ' ' + item.eventPath);
-            const severity = el('td');
-            severity.append(badge(item.severity));
-            const status = el('td');
-            status.append(badge(item.status));
+		for (const item of items) {
+			const tr = el('tr');
+			const endpoint = el('td', item.eventMethod + ' ' + item.eventPath);
+			const severity = el('td');
+			severity.append(badge(item.severity));
+			const status = el('td');
+			status.append(badge(item.status));
 
-            const action = el('td');
-            const button = el('button', 'View');
-            button.setAttribute('aria-label', 'View incident ' + item.id);
-            button.onclick = () => {
-                detail(item);
-                $('detail').focus();
-            };
-            action.append(button);
+			const action = el('td');
+			const button = el('button', 'View');
+			button.setAttribute('aria-label', 'View incident ' + item.id);
+			button.onclick = () => {
+				detail(item);
+				$('detail').focus();
+			};
+			action.append(button);
 
-            tr.append(endpoint, severity, status, el('td', date(item.createdAt)), action);
-            $('rows').append(tr);
-        }
+			tr.append(endpoint, severity, status, el('td', date(item.createdAt)), action);
+			$('rows').append(tr);
+		}
 
-        $('list-status').textContent = items.length ? items.length + (items.length === 1 ? ' matching incident.' : ' matching incidents.') : 'No incidents match these filters.';
+		$('list-status').textContent = items.length
+			? items.length + (items.length === 1 ? ' matching incident.' : ' matching incidents.')
+			: 'No incidents match these filters.';
 
-        if (selected) {
-            const item = items.find(i => i.id === selected);
-            if (item) {
-                detail(item);
-            } else {
-                selected = null;
-                $('detail').replaceChildren(
-                    el('h2', 'Select an incident'),
-                    el('p', 'The selected incident no longer matches this list.')
-                );
-            }
-        }
-    } catch (error) {
-        if (version !== generation) return;
-        $('rows').replaceChildren();
-        $('list-status').textContent = 'Could not load incidents.';
-        throw error;
-    }
+		if (selected) {
+			const item = items.find((i) => i.id === selected);
+			if (item) {
+				detail(item);
+			} else {
+				selected = null;
+				$('detail').replaceChildren(el('h2', 'Select an incident'), el('p', 'The selected incident no longer matches this list.'));
+			}
+		}
+	} catch (error) {
+		if (version !== generation) {
+			return;
+		}
+		$('rows').replaceChildren();
+		$('list-status').textContent = 'Could not load incidents.';
+		throw error;
+	}
 }
 
 async function metrics() {
-    try {
-        const data = await api('api/metrics');
-        $('metrics').replaceChildren();
+	try {
+		const data = await api('api/metrics');
+		$('metrics').replaceChildren();
 
-        const metricList = [
-            ['Events received', number(data.events.total), 'All time'],
-            ['Open incidents', number(data.incidents.open), number(data.incidents.resolved) + ' resolved · ' + number(data.incidents.total) + ' total'],
-            ['Server errors', number(data.events.serverErrors), number(data.events.rateLimitedResponses) + ' HTTP 429 responses'],
-            ['Average latency', number(data.events.averageLatencyMs) + ' ms', number(data.incidents.bySeverity.critical) + ' critical incidents']
-        ];
+		const metricList = [
+			['Events received', number(data.events.total), 'All time'],
+			[
+				'Open incidents',
+				number(data.incidents.open),
+				number(data.incidents.resolved) + ' resolved · ' + number(data.incidents.total) + ' total',
+			],
+			['Server errors', number(data.events.serverErrors), number(data.events.rateLimitedResponses) + ' HTTP 429 responses'],
+			['Average latency', number(data.events.averageLatencyMs) + ' ms', number(data.incidents.bySeverity.critical) + ' critical incidents'],
+		];
 
-        for (const [name, value, note] of metricList) {
-            const card = el('article', undefined, 'metric');
-            card.append(el('p', name), el('strong', value), el('small', note));
-            $('metrics').append(card);
-        }
-    } catch (error) {
-        $('metrics').replaceChildren(el('p', 'Metrics unavailable.'));
-        throw error;
-    }
+		for (const [name, value, note] of metricList) {
+			const card = el('article', undefined, 'metric');
+			card.append(el('p', name), el('strong', value), el('small', note));
+			$('metrics').append(card);
+		}
+	} catch (error) {
+		$('metrics').replaceChildren(el('p', 'Metrics unavailable.'));
+		throw error;
+	}
 }
 
 async function chart() {
-    try {
-        const data = await api('api/metrics/timeseries?hours=24');
-        $('chart').replaceChildren();
-        const max = Math.max(1, ...data.points.map(p => p.total));
+	try {
+		const data = await api('api/metrics/timeseries?hours=24');
+		$('chart').replaceChildren();
+		const max = Math.max(1, ...data.points.map((p) => p.total));
 
-        for (const point of data.points) {
-            const title = date(point.timestamp) + ': ' + number(point.total) + ' events, ' + number(point.serverErrors) + ' 5xx errors';
-            const bar = el('div', undefined, 'bar');
+		for (const point of data.points) {
+			const title = date(point.timestamp) + ': ' + number(point.total) + ' events, ' + number(point.serverErrors) + ' 5xx errors';
+			const bar = el('div', undefined, 'bar');
 
-            bar.title = title;
-            bar.setAttribute('role', 'img');
-            bar.setAttribute('aria-label', title);
-            const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-            svg.setAttribute('viewBox', '0 0 1 100');
-            svg.setAttribute('preserveAspectRatio', 'none');
-            svg.setAttribute('aria-hidden', 'true');
-            const rect = document.createElementNS(svg.namespaceURI, 'rect');
-            const height = 100 * point.total / max;
-            rect.setAttribute('width', '1');
-            rect.setAttribute('height', String(height));
-            rect.setAttribute('y', String(100 - height));
-            svg.append(rect);
-            bar.append(svg);
-            $('chart').append(bar);
-        }
+			bar.title = title;
+			bar.setAttribute('role', 'img');
+			bar.setAttribute('aria-label', title);
+			const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+			svg.setAttribute('viewBox', '0 0 1 100');
+			svg.setAttribute('preserveAspectRatio', 'none');
+			svg.setAttribute('aria-hidden', 'true');
+			const rect = document.createElementNS(svg.namespaceURI, 'rect');
+			const height = (100 * point.total) / max;
+			rect.setAttribute('width', '1');
+			rect.setAttribute('height', String(height));
+			rect.setAttribute('y', String(100 - height));
+			svg.append(rect);
+			bar.append(svg);
+			$('chart').append(bar);
+		}
 
-        $('chart-summary').textContent = date(data.points[0].timestamp) + ' — ' + date(data.points.at(-1).timestamp) + ' · ' + number(data.points.reduce((sum, p) => sum + p.total, 0)) + ' events';
-    } catch (error) {
-        $('chart').replaceChildren();
-        $('chart-summary').textContent = 'Activity unavailable.';
-        throw error;
-    }
+		$('chart-summary').textContent =
+			date(data.points[0].timestamp) +
+			' — ' +
+			date(data.points.at(-1).timestamp) +
+			' · ' +
+			number(data.points.reduce((sum, p) => sum + p.total, 0)) +
+			' events';
+	} catch (error) {
+		$('chart').replaceChildren();
+		$('chart-summary').textContent = 'Activity unavailable.';
+		throw error;
+	}
 }
 
 async function refresh() {
-    $('refresh').disabled = true;
-    message();
+	$('refresh').disabled = true;
+	message();
 
-    const results = await Promise.allSettled([metrics(), chart(), loadIncidents()]);
-    const errors = results.filter(r => r.status === 'rejected');
+	const results = await Promise.allSettled([metrics(), chart(), loadIncidents()]);
+	const errors = results.filter((r) => r.status === 'rejected');
 
-    $('updated').textContent = errors.length ? 'Refresh incomplete. Try again.' : 'Updated at ' + new Date().toLocaleTimeString('en-GB');
+	$('updated').textContent = errors.length ? 'Refresh incomplete. Try again.' : 'Updated at ' + new Date().toLocaleTimeString('en-GB');
 
-    if (errors.length) {
-        message(errors.map(r => r.reason.message).join(' '));
-    }
+	if (errors.length) {
+		message(errors.map((r) => r.reason.message).join(' '));
+	}
 
-    $('refresh').disabled = false;
+	$('refresh').disabled = false;
 }
 
-$('login-form').onsubmit = async event => {
-    event.preventDefault();
-    const button = event.submitter;
-    button.disabled = true;
-    message();
+$('login-form').onsubmit = async (event) => {
+	event.preventDefault();
+	const button = event.submitter;
+	button.disabled = true;
+	message();
 
-    try {
-        await api('login', {
-            method: 'POST',
-            body: JSON.stringify({ password: $('password').value })
-        });
+	try {
+		await api('login', {
+			method: 'POST',
+			body: JSON.stringify({ password: $('password').value }),
+		});
 
-        $('password').value = '';
-        session(true);
-        await refresh();
-    } catch (error) {
-        message(error.message);
-    } finally {
-        button.disabled = false;
-    }
+		$('password').value = '';
+		session(true);
+		await refresh();
+	} catch (error) {
+		message(error.message);
+	} finally {
+		button.disabled = false;
+	}
 };
 
 $('logout').onclick = async () => {
-    try {
-        await api('logout', { method: 'POST' });
-        session(false);
-        message('Signed out.');
-    } catch (error) {
-        message(error.message);
-    }
+	try {
+		await api('logout', { method: 'POST' });
+		session(false);
+		message('Signed out.');
+	} catch (error) {
+		message(error.message);
+	}
 };
 
 $('refresh').onclick = refresh;
 
 for (const name of ['status', 'severity']) {
-    $(name).onchange = () => loadIncidents().catch(error => message(error.message));
+	$(name).onchange = () => loadIncidents().catch((error) => message(error.message));
 }
 
 (async () => {
-    try {
-        await api('session');
-        session(true);
-        await refresh();
-    } catch (error) {
-        session(false);
-        message(error.message);
-    }
+	try {
+		await api('session');
+		session(true);
+		await refresh();
+	} catch (error) {
+		session(false);
+		message(error.message);
+	}
 })();
 `;

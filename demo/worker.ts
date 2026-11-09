@@ -27,15 +27,28 @@ const fixture = {
 		};
 	},
 };
-
 export default {
-    ...worker,
-    queue(batch, env, ctx) {
-        return worker.queue(batch, { ...env, AI: fixture as unknown as Ai, AI_GATEWAY_ID: 'offline-fixture' }, ctx);
-    },
-    async fetch(request, env) {
-        const response = await worker.fetch(request, { ...env, AI: fixture as unknown as Ai, AI_GATEWAY_ID: 'offline-fixture' });
-        if (!response.headers.get('Content-Type')?.startsWith('text/html')) return response;
-        return new Response((await response.text()).replace('EDGE MONITORING', 'SYNTHETIC DEMO · FIXTURE ANALYSIS'), response);
-    },
+	...worker,
+	queue(batch, env, ctx) {
+		return worker.queue(
+			batch,
+			{
+				...env,
+				AI: fixture as unknown as Ai,
+				AI_GATEWAY_ID: 'offline-fixture',
+			},
+			ctx,
+		);
+	},
+	async fetch(request, env) {
+		const response = await worker.fetch(request, {
+			...env,
+			AI: fixture as unknown as Ai,
+			AI_GATEWAY_ID: 'offline-fixture',
+		});
+		if (!response.headers.get('Content-Type')?.startsWith('text/html')) {
+			return response;
+		}
+		return new Response((await response.text()).replace('EDGE MONITORING', 'SYNTHETIC DEMO · FIXTURE ANALYSIS'), response);
+	},
 } satisfies ExportedHandler<Env, import('../src/events').EventReceivedMessage>;
