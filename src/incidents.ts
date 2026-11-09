@@ -1,5 +1,5 @@
 import { validated, type Analysis } from './analysis';
-import type { Anomaly } from "./anomaly";
+import type { WindowEvidence } from "./anomaly";
 
 export type IncidentSeverity = "medium" | "high" | "critical";
 export type IncidentStatus = "open" | "resolved";
@@ -24,37 +24,28 @@ export interface IncidentRecord {
     eventOccurredAt: number;
     analysisState: 'not_requested' | 'pending' | 'running' | 'complete' | 'failed';
     analysis: Analysis | null;
+    evidence: WindowEvidence | null;
 }
 
-export interface EventForAnalysis {
-    id: string;
-    status: number;
-    latencyMs: number;
-}
-
-export async function getEventForAnalysis(
-    db: D1Database,
-    eventId: string,
-): Promise<EventForAnalysis | null> {
-    const event = await db
-        .prepare(`
-            SELECT
-                id,
-                status,
-                latency_ms AS latencyMs
-            FROM events
-            WHERE id = ?
-        `)
-        .bind(eventId)
-        .first<EventForAnalysis>();
-
-    return event ?? null;
+export function getDetectionResult(db: D1Database, eventId: string) {
+	return db
+		.prepare(
+			`
+				SELECT ep.evidence, i.id AS incidentId
+				FROM events e
+				LEFT JOIN anomaly_episodes ep ON ep.event_id = e.id
+				LEFT JOIN incidents i ON i.event_id = e.id
+				WHERE e.id = ?
+			`,
+		)
+		.bind(eventId)
+		.first<{ evidence: string | null; incidentId: string | null }>();
 }
 
 export async function createIncident(
     db: D1Database,
     eventId: string,
-    anomaly: Anomaly,
+    anomaly: { severity: IncidentSeverity; reason: string },
     requestAnalysis = false,
 ): Promise<boolean> {
     const result = await db
@@ -88,6 +79,7 @@ const incidentSelect = `
             CASE WHEN i.analysis_state = 'running' AND i.analysis_expires_at <= unixepoch('now') * 1000
                  THEN 'failed' ELSE i.analysis_state END AS analysisState,
             i.analysis_json AS analysisJson,
+            ep.evidence AS evidenceJson,
             i.id,
             i.event_id AS eventId,
             i.severity,
@@ -101,12 +93,18 @@ const incidentSelect = `
             e.occurred_at AS eventOccurredAt
         FROM incidents AS i
         INNER JOIN events AS e ON e.id = i.event_id
+        LEFT JOIN anomaly_episodes ep ON ep.event_id = i.event_id
     `;
 
-type StoredIncident = Omit<IncidentRecord, 'analysis'> & { analysisJson: string | null };
-function present({ analysisJson, ...row }: StoredIncident): IncidentRecord {
-    const analysis = row.analysisState === 'complete' ? validated(analysisJson) : null;
-    return { ...row, analysis };
+type StoredIncident = Omit<IncidentRecord, 'analysis' | 'evidence'> & { analysisJson: string | null; evidenceJson: string | null };
+
+function present({ analysisJson, evidenceJson, ...row }: StoredIncident): IncidentRecord {
+	const analysis = row.analysisState === 'complete' ? validated(analysisJson) : null;
+	return {
+		...row,
+		analysis,
+		evidence: evidenceJson ? JSON.parse(evidenceJson) : null,
+	};
 }
 
 export async function listIncidents(

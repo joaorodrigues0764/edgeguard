@@ -42,6 +42,24 @@ with tempfile.TemporaryDirectory(prefix='edgeguard-demo-') as directory:
         for j in range(count):
             ts = hour - (23 - i) * 3600000
             rows.append(f"('synthetic-{i}-{j}',{ts},'GET','/synthetic/health',200,{65+i},'synthetic-demo',{ts},'sent')")
+    # Nineteen samples per endpoint keep the detector below its minimum sample.
+    # The final request goes through the authenticated API and the real queue.
+    if LIVE:
+        examples = [('checkout', 503, 6100, 12)]
+    else:
+        examples = [
+            ('catalog', 500, 90, 4),
+            ('search', 502, 400, 6),
+            ('checkout', 503, 6100, 12),
+        ]
+    now = int(time.time() * 1000)
+    for path, status, latency, failures in examples:
+        for i in range(19):
+            sample_status = status if i < failures else 200
+            rows.append(
+                f"('warmup-{path}-{i}',{now},'GET','/synthetic/{path}',"
+                f"{sample_status},{latency},'synthetic-demo',{now},'sent')"
+            )
     seed = base / 'seed.sql'
     seed.write_text('INSERT INTO events (id,occurred_at,method,path,status,latency_ms,client_id,created_at,queue_status) VALUES ' + ','.join(rows) + ';')
     wrangler('d1', 'execute', 'edgeguard-db', '--local', '--file', str(seed))
@@ -62,8 +80,7 @@ with tempfile.TemporaryDirectory(prefix='edgeguard-demo-') as directory:
                 time.sleep(0.5)
         else:
             sys.exit('Local Worker did not become ready.')
-        examples = [('checkout', 503, 6100)] if LIVE else [('quota', 429, 90), ('search', 502, 400), ('checkout', 503, 6100)]
-        for path, status, latency in examples:
+        for path, status, latency, _ in examples:
             data = json.dumps(dict(method='GET', path='/synthetic/' + path, status=status, latencyMs=latency, clientId='synthetic-demo')).encode()
             headers = {'Authorization': 'Bearer ' + credentials['INGEST_API_TOKEN'], 'Content-Type': 'application/json'}
             with urllib.request.urlopen(urllib.request.Request(URL + '/api/events', data, headers)) as res:

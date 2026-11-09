@@ -7,7 +7,7 @@ import {
 } from "cloudflare:test";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import worker, { type Env } from "../src/index";
-import { detectAnomaly } from "../src/anomaly";
+import { seedTraffic } from "./traffic";
 import { insertEvent } from "../src/events";
 
 interface Event {
@@ -237,6 +237,7 @@ async function seedIncident(
 
 describe("EdgeGuard Worker", () => {
     beforeEach(async () => {
+        await env.edgeguard_db.prepare("DELETE FROM anomaly_minutes").run();
         await env.edgeguard_db
             .prepare("DELETE FROM incidents")
             .run();
@@ -482,6 +483,7 @@ describe("EdgeGuard Worker", () => {
             expect(body.data[0]).toMatchObject({
                     severity: "high",
                     reason: "Test high incident",
+                    evidence: null,
                     status: "open",
                     createdAt: 1000,
                     eventMethod: "GET",
@@ -1732,67 +1734,6 @@ describe("EdgeGuard Worker", () => {
     });
 });
 
-describe("Anomaly detection", () => {
-    it("does not flag a normal event", () => {
-        expect(
-            detectAnomaly({
-                status: 200,
-                latencyMs: 100,
-            }),
-        ).toBeNull();
-    });
-
-    it("detects server errors", () => {
-        expect(
-            detectAnomaly({
-                status: 500,
-                latencyMs: 892,
-            }),
-        ).toEqual({
-            severity: "high",
-            reason: "Server returned a 5xx response",
-        });
-    });
-
-    it("detects rate-limited requests", () => {
-        expect(
-            detectAnomaly({
-                status: 429,
-                latencyMs: 100,
-            }),
-        ).toEqual({
-            severity: "medium",
-            reason: "Request was rate limited",
-        });
-    });
-
-    it("detects high latency", () => {
-        expect(
-            detectAnomaly({
-                status: 200,
-                latencyMs: 2500,
-            }),
-        ).toEqual({
-            severity: "medium",
-            reason:
-                "Request latency exceeded the anomaly threshold",
-        });
-    });
-
-    it("classifies slow server errors as critical", () => {
-        expect(
-            detectAnomaly({
-                status: 500,
-                latencyMs: 7000,
-            }),
-        ).toEqual({
-            severity: "critical",
-            reason:
-                "Server error combined with very high latency",
-        });
-    });
-});
-
 function eventMessage(eventId: string, id: string, attempts = 1) {
     return { id, timestamp: new Date(1000), attempts, body: { type: "event.received", eventId } };
 }
@@ -1810,6 +1751,7 @@ function processQueueMessage(eventId: string, messageId: string, attempts = 1) {
 
 describe("Queue consumer", () => {
     beforeEach(async () => {
+        await env.edgeguard_db.prepare("DELETE FROM anomaly_minutes").run();
         await env.edgeguard_db
             .prepare("DELETE FROM incidents")
             .run();
@@ -1819,7 +1761,15 @@ describe("Queue consumer", () => {
             .run();
     });
 
-    it("creates a high-severity incident for a server error", async () => {
+    it("creates a high-severity incident at five errors in twenty requests", async () => {
+		await seedTraffic(env.edgeguard_db, 15, {
+			path: '/api/products',
+			status: 200,
+		});
+		await seedTraffic(env.edgeguard_db, 4, {
+			path: '/api/products',
+			status: 500,
+		});
         const event = await insertEvent(env.edgeguard_db, {
             method: "GET",
             path: "/api/products",
@@ -1849,7 +1799,7 @@ describe("Queue consumer", () => {
         expect(incident).toMatchObject({
             event_id: event.id,
             severity: "high",
-            reason: "Server returned a 5xx response",
+            reason: "HTTP 5xx rate exceeded 20% (5 of 20 requests)",
             status: "open",
         });
     });
@@ -1882,6 +1832,10 @@ describe("Queue consumer", () => {
     });
 
     it("does not create duplicate incidents for a redelivered message", async () => {
+		await seedTraffic(env.edgeguard_db, 19, {
+			path: '/api/database',
+			status: 500,
+		});
         const event = await insertEvent(env.edgeguard_db, {
             method: "GET",
             path: "/api/database",
@@ -1923,9 +1877,23 @@ describe("Queue consumer", () => {
     it("retries only the failed insert in a batch and recovers on redelivery", async () => {
         const db = env.edgeguard_db;
         const input = { method: "GET", path: "/batch", status: 503, latencyMs: 100 };
-        const first = await insertEvent(db, input);
-        const second = await insertEvent(db, input);
-        const third = await insertEvent(db, { ...input, status: 429 });
+		await seedTraffic(db, 19, input);
+		await seedTraffic(db, 19, {
+			...input,
+			path: '/second',
+		});
+		await seedTraffic(db, 15, {
+			...input,
+			path: '/third',
+			status: 200,
+		});
+		await seedTraffic(db, 4, {
+			...input,
+			path: '/third',
+		});
+		const first = await insertEvent(db, input);
+		const second = await insertEvent(db, { ...input, path: '/second' });
+		const third = await insertEvent(db, { ...input, path: '/third' });
         const messages = [eventMessage(first.id, "first"), eventMessage(second.id, "second"), eventMessage(third.id, "third")];
 
         // A constraint other than the event ID must surface as a processing failure.
@@ -1946,7 +1914,16 @@ describe("Queue consumer", () => {
 
     it("recovers a failed analysis write after the claim expires without duplicating the incident", async () => {
         const db = env.edgeguard_db;
-        const event = await insertEvent(db, { method: "GET", path: "/triage", status: 503, latencyMs: 100 });
+		await seedTraffic(db, 19, {
+			path: '/triage',
+			status: 503,
+		});
+		const event = await insertEvent(db, {
+			method: 'GET',
+			path: '/triage',
+			status: 503,
+			latencyMs: 100,
+		});
         const run = vi.fn().mockRejectedValue(new Error("Gateway unavailable"));
         const config = { ...env, AI: { run } as unknown as Ai, AI_GATEWAY_ID: "test" };
         const deliver = (attempt: number) => processQueueBatch([eventMessage(event.id, "triage", attempt)], config);

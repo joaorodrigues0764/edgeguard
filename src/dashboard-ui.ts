@@ -596,6 +596,17 @@ function detail(item) {
         ['Incident', item.id]
     ].forEach(([k, v]) => dl.append(el('dt', k), el('dd', v)));
 
+	if (item.evidence) {
+		const evidence = item.evidence;
+		for (const [label, value] of [
+			['Detection window (end exclusive)', date(evidence.windowStartMs) + ' – ' + date(evidence.windowEndExclusiveMs)],
+			['HTTP 5xx', number(evidence.serverErrors) + ' / ' + number(evidence.totalRequests) + ' (' + number(evidence.errorPercent) + '%)'],
+			['Window average latency', number(evidence.averageLatencyMs) + ' ms'],
+		]) {
+			dl.append(el('dt', label), el('dd', value));
+		}
+	}
+
     panel.append(
         dl,
         el('h3', 'Rule analysis'),

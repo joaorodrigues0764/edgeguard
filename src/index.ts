@@ -9,10 +9,10 @@ import {
     type Event,
     type EventReceivedMessage,
 } from "./events";
-import { detectAnomaly } from "./anomaly";
+import { describeSpike, type WindowEvidence } from "./anomaly";
 import {
     createIncident,
-    getEventForAnalysis,
+    getDetectionResult,
     listIncidents,
     updateIncidentStatus,
     type IncidentSeverity,
@@ -86,62 +86,57 @@ const worker = {
         );
     },
 
-    async queue(batch, env, ctx): Promise<void> {
-        for (const message of batch.messages) {
-            const body: unknown = message.body;
+	async queue(batch, env, ctx): Promise<void> {
+		for (const message of batch.messages) {
+			const body: unknown = message.body;
 
-            if (!isEventReceivedMessage(body)) {
-                console.warn(`Discarding invalid queue message ${message.id}`);
+			if (!isEventReceivedMessage(body)) {
+				console.warn(`Discarding invalid queue message ${message.id}`);
 
-                message.ack();
-                continue;
-            }
+				message.ack();
+				continue;
+			}
 
-            try {
-                const event = await getEventForAnalysis(
-                    env.edgeguard_db,
-                    body.eventId,
-                );
+			try {
+				const detection = await getDetectionResult(env.edgeguard_db, body.eventId);
 
-                if (!event) {
-                    console.warn(
-                        `Event ${body.eventId} was not found`,
-                    );
+				if (!detection) {
+					console.warn(`Event ${body.eventId} was not found`);
 
-                    message.ack();
-                    continue;
-                }
+					message.ack();
+					continue;
+				}
 
-                const anomaly = detectAnomaly(event);
+				const analysisEnabled = Boolean(env.AI && env.AI_GATEWAY_ID);
+				if (detection.evidence && !detection.incidentId) {
+					const evidence: WindowEvidence = JSON.parse(detection.evidence);
+					const created = await createIncident(
+						env.edgeguard_db,
+						body.eventId,
+						{
+							severity: evidence.severity,
+							reason: describeSpike(evidence),
+						},
+						analysisEnabled,
+					);
+					if (created) {
+						console.log(`Created ${evidence.severity} incident for event ${body.eventId}`);
+					}
+				}
 
-                if (anomaly) {
-                    const created = await createIncident(
-                        env.edgeguard_db,
-                        event.id,
-                        anomaly,
-                        Boolean(env.AI && env.AI_GATEWAY_ID),
-                    );
+				// A redelivery can resume a pending or expired claim, including a legacy incident.
+				if (analysisEnabled && (detection.evidence || detection.incidentId)) {
+					await analyse(env, body.eventId);
+				}
 
-                    if (env.AI && env.AI_GATEWAY_ID) await analyse(env, event.id);
+				message.ack();
+			} catch (error) {
+				console.error(`Failed to process event ${body.eventId} (message ${message.id}, attempt ${message.attempts}):`, error);
 
-                    if (created) {
-                        console.log(
-                            `Created ${anomaly.severity} incident for event ${event.id}`,
-                        );
-                    }
-                }
-
-                message.ack();
-            } catch (error) {
-                console.error(
-                    `Failed to process event ${body.eventId} (message ${message.id}, attempt ${message.attempts}):`,
-                    error,
-                );
-
-                message.retry();
-            }
-        }
-    },
+				message.retry();
+			}
+		}
+	},
 
     async fetch(
         request: Request,

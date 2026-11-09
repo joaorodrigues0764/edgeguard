@@ -249,7 +249,7 @@ export async function insertOrGetIdempotentEvent(
 
         const result = await db
                 .prepare(`
-                        INSERT OR IGNORE INTO events (
+                        INSERT INTO events (
                                 id,
                                 occurred_at,
                                 method,
@@ -263,6 +263,7 @@ export async function insertOrGetIdempotentEvent(
                                 queue_status
                         )
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
+                        ON CONFLICT(idempotency_key) DO NOTHING
                 `)
                 .bind(
                         event.id,

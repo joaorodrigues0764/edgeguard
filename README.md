@@ -13,9 +13,11 @@ npm ci
 npm run demo
 ```
 
-Open the loopback dashboard URL printed in the terminal and use its temporary password. The demo runs without a Cloudflare account or a project `.dev.vars`. Each run migrates a fresh temporary D1 database, seeds healthy hourly history, then submits three **synthetic** anomalies through the actual ingestion and queue paths. Refresh after the queue processes the batch. Select **GET /synthetic/checkout**, inspect its analysis, mark it resolved and use the status filter to find and reopen it. Ctrl+C discards the demo state. The chart is relative to the current hour; IDs, timestamps and the temporary password change each run.
+Open the loopback dashboard URL printed in the terminal and use its temporary password. The demo runs without a Cloudflare account or a project `.dev.vars`. Each run migrates a fresh temporary D1 database, seeds healthy hourly history and 19 recent observations per demo endpoint, then sends the twentieth request for each spike through the actual ingestion and queue paths. Refresh after the queue processes the batch. Select **GET /synthetic/checkout**, inspect its analysis, mark it resolved and use the status filter to find and reopen it. Ctrl+C discards the demo state. The chart is relative to the current hour; IDs, timestamps and the temporary password change each run.
 
 The demo uses a deterministic **fixture** instead of a hosted model. The banner and synthetic paths identify the sample data. For one real inference without deploying, follow the [live smoke test](docs/live-smoke.md).
+
+The screenshots below show the earlier per-event detector. The current detail panel also shows the opening window.
 
 ![English operations dashboard displaying synthetic hourly activity and three incidents](docs/images/dashboard-overview.png)
 
@@ -26,8 +28,8 @@ The demo uses a deterministic **fixture** instead of a hosted model. The banner 
 - **Event ingestion:** validate and store application events using Cloudflare Workers and D1.
 - **Asynchronous processing:** publish events to Cloudflare Queues and analyse them in a queue consumer.
 - **Delivery recovery:** a scheduled job republishes pending events. A dead-letter queue retains messages that exhaust consumer retries for operator review.
-- **Anomaly detection:** identify server errors, rate-limited responses, and high-latency requests.
-- **Incident management:** create incidents with severity levels, prevent duplicate incidents for the same event, and update incident status.
+- **Anomaly detection:** detect sustained endpoint 5xx spikes with configurable sample and recovery thresholds.
+- **Incident management:** create incidents with severity levels, group sustained failures into one incident per episode, and update incident status.
 - **Operational metrics:** calculate event counts, server-error counts, rate-limited responses, average latency, and incident statistics.
 - **Time-series metrics:** aggregate event data into hourly buckets, including intervals with no events.
 - **Request rate limiting:** protect event ingestion with Cloudflare's Rate Limiting API.
@@ -41,14 +43,14 @@ The demo uses a deterministic **fixture** instead of a hosted model. The banner 
 ```mermaid
 flowchart TD
     Client[Event reporter] -->|Ingest token| Worker[Worker API]
-    Worker -->|Persist event| D1[(D1: events and incidents)]
+    Worker -->|Persist event and evaluate endpoint window atomically| D1[(D1)]
     Worker -->|Event ID| Queue[Cloudflare Queues]
     Cron[Scheduled recovery] -->|Republish pending events| Queue
-    Queue --> Rules[Deterministic anomaly rules]
+    Queue --> Consumer[Event consumer]
     Queue -->|Consumer retries exhausted| DLQ[edgeguard-events-dlq]
-    Rules -->|Insert unique incident first| D1
-    Rules -->|Claim analysis in D1| Analysis[Analysis worker code]
-    Analysis -->|Status and latency| Gateway[AI Gateway]
+    Consumer -->|Materialise recorded opening as incident| D1
+    Consumer -->|Claim analysis in D1| Analysis[Analysis worker code]
+    Analysis -->|Incident evidence| Gateway[AI Gateway]
     Gateway --> Model[Workers AI]
     Model --> Validate[Server schema validation]
     Validate -->|Store result or mark failed| D1
@@ -60,14 +62,46 @@ flowchart TD
 ### Event processing
 
 1. A client submits an event to the ingestion endpoint.
-2. The Worker validates the request and stores the event in D1.
+2. The Worker validates the request and stores the event in D1. An insert trigger updates the endpoint window and saves evidence when a new episode opens.
 3. The Worker records telemetry and publishes a message to a Cloudflare Queue.
-4. The queue consumer retrieves the event and runs the anomaly detection rules.
-5. If an anomaly is detected, an incident is created in D1.
+4. The queue consumer looks up the event and its opening snapshot by ID.
+5. An opening creates one incident linked to that event. Other events in the same episode still contribute to metrics.
 6. When AI is configured, the consumer claims an analysis attempt, calls Workers AI through AI Gateway and validates the result against a strict schema before storing it. Provider and validation failures mark only the analysis as failed.
 7. Clients with the appropriate permissions can query events, inspect incidents, and retrieve metrics.
 
-Incident creation is idempotent for each event: the database prevents duplicate incidents for the same event.
+### Endpoint error detection
+
+Migration `0006_endpoint_error_windows.sql` installs one deterministic rule, `endpoint_5xx_rate_v2`. Its defaults are:
+
+| Decision         | Condition                                                                               |
+| ---------------- | --------------------------------------------------------------------------------------- |
+| Open an episode  | At least 20 requests, at least 5 HTTP 5xx, and strictly more than 20% 5xx in the window |
+| Opening severity | Critical at 50% 5xx or above, high otherwise                                            |
+| Rearm the rule   | At least 20 requests with a 5xx rate at or below 10%                                    |
+| Window           | Current UTC minute and four preceding minutes                                           |
+
+For example, 5 errors in 20 requests open a high-severity incident. Five in 25 sit exactly on the threshold. The lower recovery threshold prevents a rate oscillating around 20% from splitting one incident. An idle endpoint stays in its last state until sufficient traffic demonstrates recovery. Operators can resolve or reopen an incident independently.
+
+**Window calculation.** On every successful event insert, D1 increments the count, 5xx count and latency sum for the exact HTTP method, reported path and server-assigned ingestion minute. It drops expired buckets for that endpoint, then sums the retained counts. Average latency is the sum of all latencies divided by the total request count. Thresholds use integer cross-multiplication. The composite primary key `(method, path, minute)` bounds the aggregate to five rows at the defaults. The window advances by whole minutes and the current minute is partial. At 12:04:30 UTC, the snapshot covers requests ingested so far in the interval [12:00, 12:05). Overlapping windows are evaluated on each insert.
+
+**Concurrency and recovery.** In the same SQLite statement as the event insert, the trigger records the opening event ID and an immutable JSON snapshot. A partial unique index permits one active episode per method and path for this rule. Replaying an ingestion idempotency key inserts no row and fires no trigger. The consumer can materialise openings in any order. The existing unique constraint on `incidents.event_id` protects concurrent deliveries of the opening event, including after a later episode has opened. Detection storage errors roll back ingestion. A failed queue-side D1 operation follows the existing per-message retry and DLQ path. [D1 concurrency](https://developers.cloudflare.com/d1/platform/limits/#concurrency-and-throughput) · [SQLite trigger semantics](https://www.sqlite.org/lang_createtrigger.html) · [Queue ordering](https://developers.cloudflare.com/queues/reference/how-queues-works/)
+
+**Timestamps.** Reporters supply status and latency. The service assigns `created_at` before insertion. The newest committed minute for an endpoint anchors its window. An out-of-order insert inside that window contributes at its original minute. An older insert remains in the raw event log and metrics but falls outside detection. Late queue delivery can delay incident creation and AI analysis. Its evidence still describes the original opening.
+
+**Configuration and cost.** The single row in `anomaly_policy` configures window length (1–60 minutes), minimum requests, minimum failures, opening percentage and recovery percentage. For example:
+
+```sql
+UPDATE anomaly_policy
+SET window_minutes = 10, min_requests = 40, min_failures = 8,
+    open_percent = 20, recover_percent = 10
+WHERE id = 1;
+```
+
+Changes take effect on the next insert for each endpoint. Increasing the window requires fresh traffic to fill previously expired minutes. The trigger adds synchronous writes to ingestion. Dormant endpoints retain their last buckets, and raw paths with IDs or query strings create distinct groups. For this MVP, HTTP 429 and slow requests contribute to metrics and the latency summary. Standalone latency alerts, p95 and historical baselines are deferred. Exact p95 needs information beyond counts and sums, and baseline comparisons need representative endpoint history.
+
+**Migration boundary.** Detection starts with inserts after migration 0006. Historical events are available to existing APIs and metrics, and historical incidents retain their analysis and operator status. Their window evidence is null. A previously queued event without an opening or an existing incident is acknowledged. For a coordinated upgrade, drain the legacy consumer and pause ingestion across the migration and Worker cutover to avoid applying the previous per-event rules to new traffic.
+
+### Queue delivery
 
 A Cron Trigger runs every minute and republishes up to 50 pending events that are at least one minute old, including events submitted without an idempotency key. Events are marked as sent only after the queue confirms publication. A crash between publication and the database update may cause duplicate delivery; the consumer's unique event constraint prevents duplicate incidents.
 
@@ -185,7 +219,7 @@ curl "http://localhost:8787/api/incidents?severity=critical&status=open&limit=10
 
 Supported severity values are `medium`, `high`, and `critical`. Supported status values are `open` and `resolved`. Both filters are optional.
 
-The response includes incident information and the corresponding event details.
+The response includes incident information, the triggering event details and an additive `evidence` field. For v2 openings it contains the rule, endpoint, severity, UTC window bounds in Unix milliseconds, sample and failure counts, error percentage, mean latency and configured opening thresholds. Earlier incidents return `evidence: null`.
 
 ### Update incident status
 
@@ -322,9 +356,9 @@ The consumer configuration names `edgeguard-events-dlq` as the destination for e
 
 1. In the Cloudflare dashboard, select **Queues → edgeguard-events-dlq → Messages → List**. Correlate the event ID with the Worker error logs and the D1 event and incident. Inspect messages before retention expires. [Preview messages](https://developers.cloudflare.com/queues/examples/list-messages-from-dash/)
 2. Correct the processing failure. For a valid event that still needs processing, send `{"type":"event.received","eventId":"<original D1 event ID>"}` as **JSON** to `edgeguard-events`. This replays the existing event through the consumer. [Send a queue message](https://developers.cloudflare.com/queues/examples/send-messages-from-dash/)
-3. Confirm processing succeeded before acknowledging the selected DLQ copy. For an anomalous event, verify the incident for the original event ID and its analysis state. A persisted `failed` analysis can be retried through the administrator endpoint.
+3. Confirm processing succeeded before acknowledging the selected DLQ copy. For an event with an opening in `anomaly_episodes`, verify the incident for its original event ID and its analysis state. A persisted `failed` analysis can be retried through the administrator endpoint.
 
-To verify hosted routing in isolated staging, install the following temporary trigger in its D1 database before submitting a synthetic HTTP 503 event with the path `/synthetic/dlq-check`.
+To verify hosted routing in isolated staging, install the following temporary trigger in its D1 database on a fresh endpoint. Submit 20 HTTP 503 events within one window, all with method GET and path `/synthetic/dlq-check`. Pace ingestion within its rate limit.
 
 ```sql
 CREATE TRIGGER fail_dlq_check BEFORE INSERT ON incidents
@@ -334,7 +368,7 @@ BEGIN
 END;
 ```
 
-Confirm the event is marked `sent` and look for attempts 1–4 in the Worker logs. Once the message appears in the DLQ, run `DROP TRIGGER fail_dlq_check` in staging and follow the replay steps above. Expect one incident for the original event ID. Remove the trigger even if the check is interrupted.
+Find the opening event in `anomaly_episodes`, confirm it is marked `sent` in `events`, and look for attempts 1–4 in the Worker logs. Once the message appears in the DLQ, run `DROP TRIGGER fail_dlq_check` in staging and follow the replay steps above. Expect one incident for the original event ID. Remove the trigger even if the check is interrupted.
 
 ## Design notes and limitations
 
@@ -344,8 +378,8 @@ Confirm the event is marked `sent` and look for attempts 1–4 in the Worker log
 - Time-series timestamps represent the start of each hour in Unix milliseconds.
 - The ingestion rate limiter is keyed by the connecting client IP address.
 - Bearer tokens use static configured secrets. This project does not currently implement user accounts, per-user identities, or expiring access tokens.
-- The model sees only HTTP status and latency. A valid schema does not establish factual accuracy: possible causes are hypotheses for an operator to check. Analysis never updates incident status.
-- Legacy incidents show “Not requested”. There is no automatic backfill. Provider errors, invalid output and timeouts need an operator retry; an interrupted running claim becomes retryable after one minute. The attempt ID prevents late completions from overwriting a newer result. Retries can consume inference even if a previous provider request completed without saving its response.
+- For a window incident, the model receives the immutable opening snapshot, including the reported method and path, window bounds, 5xx count, sample size, error percentage and mean latency. Historical incidents without a snapshot supply the event’s HTTP status and latency. The prompt treats telemetry as untrusted data and asks for an observed summary, explicitly hypothetical causes and suggested checks. Analysis never updates incident status.
+- Incidents predating AI support show “Not requested”. There is no automatic analysis backfill. Provider errors, invalid output and timeouts need an operator retry; an interrupted running claim becomes retryable after one minute. The attempt ID prevents late completions from overwriting a newer result. Retries can consume inference even if a previous provider request completed without saving its response.
 - The offline demo does not verify provider credentials, billing, model behaviour, remote analytics or production configuration.
 
 EdgeGuard is a portfolio project demonstrating serverless backend engineering and observability patterns. It has not been independently security-audited and should not be treated as a production security product without further review.
