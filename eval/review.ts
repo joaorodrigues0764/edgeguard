@@ -1,6 +1,14 @@
 import { buildAnalysisInput, validateModelResponse } from '../src/analysis.ts';
 import type { Scenario } from './scenarios.ts';
 
+function mentionsEndpoint(summary: string, path: string): boolean {
+	const literalPath = path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+	// Allow prose delimiters around the whole label, including a sentence-final period.
+	const before = /(?:^|[\s([`"'“‘])/;
+	const after = /(?=$|[\s)\]`"'”’]|[.,;:!?](?=\s|$))/;
+	return new RegExp(before.source + literalPath + after.source).test(summary);
+}
+
 // These checks flag reports for human review. They do not establish causality or actionability.
 export function reviewReport(scenario: Scenario, candidate: unknown) {
 	const report = validateModelResponse(candidate);
@@ -24,7 +32,7 @@ export function reviewReport(scenario: Scenario, candidate: unknown) {
 
 	if ('path' in evidence) {
 		const modelEvidence = JSON.parse(buildAnalysisInput(evidence).messages[1].content);
-		if (!summary.includes(modelEvidence.path)) {
+		if (!mentionsEndpoint(report.summary, modelEvidence.path)) {
 			flags.push('check_endpoint');
 		}
 		const pairs = summary.matchAll(/\b(\d+)\s*(?:out of|of|\/)\s*(\d+)\s+(?:requests|responses)\b/gi);

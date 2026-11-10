@@ -48,6 +48,12 @@ Standard output is JSONL. Each attempted case emits its model, scenario ID, outc
 
 For human grading, set `EDGEGUARD_REVIEW_FILE` to a **new** private local path before the authorised run. The CLI creates it exclusively with owner-only permissions and writes schema-valid reports, review flags and review notes keyed by scenario. Keep it outside the repository. Join it with the built-in synthetic fixture by scenario ID. Record the Git revision and evaluation date with the results. The [smoke test](live-smoke.md) exercises a different, billable path and needs its own call budget.
 
+### First hosted observation
+
+On 2026-11-10, one `successful-opener` request returned HTTP 200 in 8740.95291 ms end to end. Workers AI reported 297 input tokens and 253 output tokens (550 total). The summary correctly reported 5 HTTP 5xx responses out of 20 requests (25%) and 200 ms mean latency, but paraphrased the endpoint instead of naming `/checkout`. The outcome was `review_flagged` with the sole flag `check_endpoint`.
+
+After the run, the Workers AI dashboard showed 59.74 of 10,000 Neurons for the account. AI Gateway showed one request through `edgeguard-staging`, 550 tokens and $0.00 displayed cost. This single observation leaves model quality across scenarios and the cost of future calls unmeasured.
+
 ## Reviewing real outputs
 
 For each case, compare the private review record with its synthetic evidence and scenario-specific review note. Mark each row **pass**, **fail** or **unavailable** and record a short reason. An absent or invalid report fails the structure check and has unavailable prose scores. Report the number attempted, valid and reviewed alongside pass counts per criterion.
