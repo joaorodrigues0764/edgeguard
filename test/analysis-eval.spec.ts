@@ -31,6 +31,56 @@ describe('Synthetic AI report evaluation (offline)', () => {
 		expect(evaluation.flags).toEqual([]);
 	});
 
+	it.each([
+		{
+			label: 'the checkout process',
+			flags: ['check_endpoint'],
+		},
+		{
+			label: '/checkout/confirm',
+			flags: ['check_endpoint'],
+		},
+		{
+			label: '/v2/checkout',
+			flags: ['check_endpoint'],
+		},
+		{
+			label: '/checkout',
+			flags: [],
+		},
+	])('checks the endpoint label "$label" with identical window metrics', ({ label, flags }) => {
+		const scenario = scenarios.find((item) => item.id === 'successful-opener')!;
+		const report = candidate(`5 of 20 requests returned HTTP 5xx (25%), with 200 ms mean latency at ${label}.`);
+
+		const evaluation = reviewReport(scenario, report);
+
+		expect(evaluation.report).toEqual(report);
+		expect(evaluation.flags).toEqual(flags);
+	});
+
+	it.each([
+		{
+			path: '/checkout.v[ab]',
+			label: '/checkout.v[ab]',
+			lookalike: '/checkoutXva',
+		},
+		{
+			path: '//synthetic/checkout',
+			label: '[unavailable path]',
+			lookalike: 'unavailable path',
+		},
+	])('matches the model-facing label "$label" literally', ({ path, label, lookalike }) => {
+		const opener = scenarios.find((item) => item.id === 'successful-opener')!;
+		const scenario = { ...opener, evidence: { ...opener.evidence, path } };
+		const summary = referenceSummaries[opener.id];
+
+		const exact = reviewReport(scenario, candidate(summary.replace('/checkout', label)));
+		const different = reviewReport(scenario, candidate(summary.replace('/checkout', lookalike)));
+
+		expect(exact.flags).toEqual([]);
+		expect(different.flags).toEqual(['check_endpoint']);
+	});
+
 	it('flags unsupported measurements and a status subtype missing from the snapshot', () => {
 		const scenario = scenarios.find((item) => item.id === 'successful-opener')!;
 		const report = candidate('GET /other returned HTTP 503 on 9 of 12 requests (75%). Mean latency was 900 ms.');
