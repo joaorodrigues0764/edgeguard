@@ -1,6 +1,6 @@
 # Controlled Cloudflare staging validation
 
-Milestone 4A runs offline. The authorised Cloudflare request budget is **zero**. The first proposed hosted evaluation is **one** REST request for the built-in `successful-opener` scenario. It needs an account, a dedicated gateway and an inference credential. The Worker, queues and database are a separate integration exercise.
+The [initial hosted REST evaluation](analysis-evaluation.md#follow-up-and-milestone-closeout) is complete. The staging Worker has yet to be deployed and its D1 database and queues have yet to be provisioned. The next proposed stage is an isolated Worker integration trial with a **$0 spending ceiling and zero AI calls**. Provisioning, remote migrations, deployment and synthetic traffic each require explicit approval.
 
 ## Account and cost check before authorisation
 
@@ -10,7 +10,7 @@ Milestone 4A runs offline. The authorised Cloudflare request budget is **zero**.
 - Record the approved case, model, maximum calls and money limit. At the published model rates, 1,000 input tokens and 550 output tokens would represent about 139 Neurons or USD 0.00153 before allowances. The input count is illustrative. The output cap is 550. Reconcile actual usage with the account dashboard and billing records. [Model pricing](https://developers.cloudflare.com/workers-ai/platform/pricing/)
 - For an integration test, also check Workers requests and CPU, D1 database count, storage and rows read/written, queue count, operations and retention. Free-plan reference points include 100,000 Worker requests/day, 500 MB per D1 database and 24-hour queue retention. Redelivery adds queue operations. Include Workers Logs and Analytics reads/writes in the inventory. [Workers limits](https://developers.cloudflare.com/workers/platform/limits/) · [D1 limits](https://developers.cloudflare.com/d1/platform/limits/) · [Queues limits](https://developers.cloudflare.com/queues/platform/limits/) · [D1 pricing](https://developers.cloudflare.com/d1/platform/pricing/) · [Queues pricing](https://developers.cloudflare.com/queues/platform/pricing/) · [Workers pricing](https://developers.cloudflare.com/workers/platform/pricing/) · [Analytics Engine pricing](https://developers.cloudflare.com/analytics/analytics-engine/pricing/)
 
-## First REST evaluation
+## Any future REST evaluation
 
 1. Obtain approval to create `edgeguard-staging` and a dedicated, account-scoped Workers AI token if needed. Verify gateway ownership, settings and quota immediately before the run. Keep the token in a secret manager or protected shell environment.
 2. Obtain approval for exactly **one** synthetic REST attempt, including the agreed spending ceiling. Set `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN` and `AI_GATEWAY_ID=edgeguard-staging`. From the repository root, the authorised command would be `npm run --silent eval:analysis:live -- --live successful-opener`. Use the [evaluation guide](analysis-evaluation.md) to capture a private review artifact if needed.

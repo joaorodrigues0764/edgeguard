@@ -54,6 +54,16 @@ On 2026-11-10, one `successful-opener` request returned HTTP 200 in 8740.95291 m
 
 After the run, the Workers AI dashboard showed 59.74 of 10,000 Neurons for the account. AI Gateway showed one request through `edgeguard-staging`, 550 tokens and $0.00 displayed cost. This single observation leaves model quality across scenarios and the cost of future calls unmeasured.
 
+### Follow-up and milestone closeout
+
+Between the two HTTP 200 responses, an attempt after PR #9 returned HTTP 401 because of an invalid token. The token was subsequently verified active. The authentication failure yielded no valid model report or token counts, so its billing impact is unknown.
+
+On 2026-11-10, the revised prompt was evaluated on the same `successful-opener` evidence. The request returned HTTP 200 in 6634.788948 ms end to end, with 331 input tokens and 212 output tokens (543 total). The automated outcome changed from `review_flagged` (`check_endpoint`) to `valid` with `flags: []`. Human review confirmed the literal `/checkout` label, 5 HTTP 5xx errors in 20 requests, the 25% rate and 200 ms mean latency. The report explicitly described its hypotheses as unverified.
+
+The Workers AI account meter then showed 111.98 of 10,000 Neurons. The increase from 59.74 was 52.24 Neurons. Attributing that difference to the follow-up assumes no other account activity between readings. The cumulative `edgeguard-staging` gateway display showed two requests, approximately 1.09k tokens and $0.00 displayed cost.
+
+This closes the initial hosted evaluation. The revised summary addressed the observed omission on this case. One successful follow-up cannot establish statistical reliability, general model quality or that the prompt change caused the lower latency.
+
 ## Reviewing real outputs
 
 For each case, compare the private review record with its synthetic evidence and scenario-specific review note. Mark each row **pass**, **fail** or **unavailable** and record a short reason. An absent or invalid report fails the structure check and has unavailable prose scores. Report the number attempted, valid and reviewed alongside pass counts per criterion.
