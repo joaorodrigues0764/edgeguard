@@ -23,6 +23,7 @@
 
 		/* Disable emitting files from a compilation. */
 		"noEmit": true,
+		"allowImportingTsExtensions": true,
 
 		/* Ensure that each file can be safely transpiled without relying on other imports. */
 		"isolatedModules": true,
@@ -36,11 +37,8 @@
 
 		/* Skip type checking all .d.ts files. */
 		"skipLibCheck": true,
-		"types": [
-			"./worker-configuration.d.ts",
-			"node"
-		]
+		"types": ["./worker-configuration.d.ts", "node"]
 	},
 	"exclude": ["test"],
-	"include": ["worker-configuration.d.ts", "src/**/*.ts", "demo/worker.ts"]
+	"include": ["worker-configuration.d.ts", "src/**/*.ts", "demo/worker.ts", "eval/**/*.ts", "eval/**/*.mts"]
 }

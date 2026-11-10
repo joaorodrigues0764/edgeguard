@@ -101,6 +101,10 @@ Changes take effect on the next insert for each endpoint. Increasing the window 
 
 **Migration boundary.** Detection starts with inserts after migration 0006. Historical events are available to existing APIs and metrics, and historical incidents retain their analysis and operator status. Their window evidence is null. A previously queued event without an opening or an existing incident is acknowledged. For a coordinated upgrade, drain the legacy consumer and pause ingestion across the migration and Worker cutover to avoid applying the previous per-event rules to new traffic.
 
+### Evaluating incident analysis
+
+Run `npm run eval:analysis` for the seven synthetic scenarios and their offline contract checks. The hosted evaluator reuses the production request builder and validator and requires an explicit case selection. The evaluation guide includes the live command, grading rubric, limitations and how to interpret attempt counts, binding latency and provider-reported tokens. [AI analysis evaluation and operations](docs/analysis-evaluation.md)
+
 ### Queue delivery
 
 A Cron Trigger runs every minute and republishes up to 50 pending events that are at least one minute old, including events submitted without an idempotency key. Events are marked as sent only after the queue confirms publication. A crash between publication and the database update may cause duplicate delivery; the consumer's unique event constraint prevents duplicate incidents.
@@ -378,7 +382,7 @@ Find the opening event in `anomaly_episodes`, confirm it is marked `sent` in `ev
 - Time-series timestamps represent the start of each hour in Unix milliseconds.
 - The ingestion rate limiter is keyed by the connecting client IP address.
 - Bearer tokens use static configured secrets. This project does not currently implement user accounts, per-user identities, or expiring access tokens.
-- For a window incident, the model receives the immutable opening snapshot, including the reported method and path, window bounds, 5xx count, sample size, error percentage and mean latency. Historical incidents without a snapshot supply the event’s HTTP status and latency. The prompt treats telemetry as untrusted data and asks for an observed summary, explicitly hypothetical causes and suggested checks. Analysis never updates incident status.
+- For a window incident, the model receives the opening snapshot with a bounded, query-free endpoint label, including the method, window bounds, 5xx count, sample size, error percentage and mean latency. Historical incidents without a snapshot supply the event’s HTTP status and latency. The prompt treats telemetry as untrusted data and asks for an observed summary, explicitly hypothetical causes and suggested checks. Analysis never updates incident status.
 - Incidents predating AI support show “Not requested”. There is no automatic analysis backfill. Provider errors, invalid output and timeouts need an operator retry; an interrupted running claim becomes retryable after one minute. The attempt ID prevents late completions from overwriting a newer result. Retries can consume inference even if a previous provider request completed without saving its response.
 - The offline demo does not verify provider credentials, billing, model behaviour, remote analytics or production configuration.
 
