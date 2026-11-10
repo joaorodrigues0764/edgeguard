@@ -14,7 +14,7 @@ From a checkout with the locked dependencies installed, run:
 npm run eval:analysis
 ```
 
-This Vitest target exercises the production request builder and report validator, independent handwritten reference summaries, and deliberately flawed candidates. It runs offline. A passing test demonstrates that the evaluator accepts or flags those candidates. It supplies no estimate of model accuracy or real inference latency.
+This Vitest target exercises the production request builder and report validator, independent handwritten reference summaries, and deliberately flawed candidates. Local HTTP transports also exercise the live runner and its JSONL metrics. It runs offline. A passing test demonstrates that the evaluator accepts or flags those candidates. It supplies no estimate of model accuracy or real inference latency.
 
 | Case ID                 | Evidence available to the model                | What to look for                                                                                  |
 | ----------------------- | ---------------------------------------------- | ------------------------------------------------------------------------------------------------- |
@@ -40,11 +40,17 @@ npm run --silent eval:analysis:live -- --live successful-opener
 npm run --silent eval:analysis:live -- --live all > /tmp/edgeguard-analysis.jsonl
 ```
 
-Both the flag and a valid selection are required. Only the built-in synthetic evidence is submitted. There is no deployment, production incident lookup or application-level retry. Provider/transport failure stops the run. Completed cases emit one JSON record each, including the safe input evidence, validated report, model and review flags. An invalid report or review flag produces a nonzero exit code. Keep the Git revision and evaluation date with the records for comparisons. The dashboard and queue integration can also be exercised using the separate [opt-in smoke test](live-smoke.md).
+Both the flag and a valid selection are required. Each selected synthetic scenario makes one sequential REST attempt with redirects disabled, a 20-second client deadline and one gateway attempt. A timeout can occur after the provider accepted the request. Follow the [staging approval checklist](staging.md) before selecting a hosted case.
+
+Standard output is JSONL. Each attempted case emits its model, scenario ID, outcome, HTTP status (when received), review flags and metrics. `restEndToEndLatencyMs` measures from just before the REST call through reading and decoding the bounded response, including network and AI Gateway overhead. A failed attempt records elapsed time until failure. `inputTokens`, `outputTokens` and `totalTokens` carry the provider's `result.usage` counts independently. Missing, negative or malformed counts are `null`. A reported zero is `0`. Leave unknown counts out of averages and disclose the number of cases with reported usage.
+
+`valid` means the schema and automated review checks passed. `review_flagged` retains a schema-valid report for human review and sets a nonzero exit status. HTTP, transport, timeout, provider, malformed-envelope and invalid-report outcomes stop the batch after emitting the failure record. The metrics stream excludes credentials, prompts, evidence, raw errors and model prose.
+
+For human grading, set `EDGEGUARD_REVIEW_FILE` to a **new** private local path before the authorised run. The CLI creates it exclusively with owner-only permissions and writes schema-valid reports, review flags and review notes keyed by scenario. Keep it outside the repository. Join it with the built-in synthetic fixture by scenario ID. Record the Git revision and evaluation date with the results. The [smoke test](live-smoke.md) exercises a different, billable path and needs its own call budget.
 
 ## Reviewing real outputs
 
-For each case, compare the report with its supplied evidence and scenario-specific review note. Mark each row **pass**, **fail** or **unavailable** and record a short reason. An absent or invalid report fails the structure check and has unavailable prose scores. Report the number attempted, valid and reviewed alongside pass counts per criterion.
+For each case, compare the private review record with its synthetic evidence and scenario-specific review note. Mark each row **pass**, **fail** or **unavailable** and record a short reason. An absent or invalid report fails the structure check and has unavailable prose scores. Report the number attempted, valid and reviewed alongside pass counts per criterion.
 
 | Criterion                | Pass when                                                                                                                                                                          |
 | ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

@@ -28,7 +28,7 @@ with tempfile.TemporaryDirectory(prefix='edgeguard-demo-') as directory:
     if LIVE:
         config.update(
             ai={'binding': 'AI', 'remote': True},
-            vars={'AI_GATEWAY_ID': os.getenv('AI_GATEWAY_ID', 'default')},
+            vars={**config['vars'], 'AI_GATEWAY_ID': os.getenv('AI_GATEWAY_ID', 'default')},
         )
     credentials = {key: secrets.token_hex(24) for key in config['secrets']['required']}
     (base / '.dev.vars').write_text(''.join(f'{k}={v}\n' for k, v in credentials.items()))
