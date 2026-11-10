@@ -10,7 +10,7 @@
 		"cf-typegen": "wrangler types",
 		"typecheck": "tsc --noEmit",
 		"typecheck:test": "tsc --noEmit -p test/tsconfig.json",
-		"eval:analysis": "vitest run test/analysis-eval.spec.ts",
+		"eval:analysis": "vitest run test/analysis-eval.spec.ts test/live-eval.spec.ts",
 		"eval:analysis:live": "node eval/live.mts",
 		"demo": "python3 demo/run.py"
 	},

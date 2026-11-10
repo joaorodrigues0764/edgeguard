@@ -4,6 +4,8 @@
 
 EdgeGuard ingests application events, detects anomalous behaviour, creates incidents, and exposes operational metrics through an authenticated API. It uses Cloudflare's developer platform to demonstrate event-driven architecture, serverless data processing, observability, and role-based access control.
 
+For a controlled Cloudflare test, start with the [staging setup, cost checks and approval steps](docs/staging.md).
+
 ## Try the synthetic demo
 
 From a clean checkout, install Node.js (verified with 26), npm and Python 3, then run:

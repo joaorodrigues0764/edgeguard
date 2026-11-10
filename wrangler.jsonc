@@ -4,7 +4,7 @@
 	"main": "src/index.ts",
 	"compatibility_date": "2026-10-01",
 	"ai": { "binding": "AI", "remote": true },
-	"vars": { "AI_GATEWAY_ID": "default" },
+	"vars": { "AI_GATEWAY_ID": "default", "TELEMETRY_DATASET": "edgeguard_telemetry" },
 	"triggers": {
 		"crons": ["* * * * *"]
 	},
@@ -13,12 +13,7 @@
 	},
 	"upload_source_maps": true,
 	"secrets": {
-		"required": [
-			"INGEST_API_TOKEN",
-			"DASHBOARD_API_TOKEN",
-			"ADMIN_API_TOKEN",
-			"DASHBOARD_PASSWORD"
-		]
+		"required": ["INGEST_API_TOKEN", "DASHBOARD_API_TOKEN", "ADMIN_API_TOKEN", "DASHBOARD_PASSWORD"]
 	},
 	"d1_databases": [
 		{

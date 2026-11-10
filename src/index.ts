@@ -28,6 +28,7 @@ import { readJsonBody } from './body';
 export interface Env {
 	AI?: Ai;
 	AI_GATEWAY_ID?: string;
+	TELEMETRY_DATASET: string;
 	DASHBOARD_PASSWORD?: string;
 	edgeguard_db: D1Database;
 	EVENTS_QUEUE: Queue<EventReceivedMessage>;
@@ -246,7 +247,7 @@ const worker = {
 			}
 
 			try {
-				const metrics = await getTelemetryMetrics(env.ANALYTICS_SQL, hours);
+				const metrics = await getTelemetryMetrics(env.ANALYTICS_SQL, env.TELEMETRY_DATASET, hours);
 
 				return Response.json({
 					data: metrics,
