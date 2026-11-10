@@ -1,29 +1,31 @@
 {
-  "name": "edgeguard",
-  "version": "0.0.0",
-  "private": true,
-  "scripts": {
-    "deploy": "wrangler deploy",
-    "dev": "wrangler dev",
-    "start": "wrangler dev",
-    "test": "vitest",
-    "cf-typegen": "wrangler types",
-    "typecheck": "tsc --noEmit",
-    "typecheck:test": "tsc --noEmit -p test/tsconfig.json",
-    "demo": "python3 demo/run.py"
-  },
-  "devDependencies": {
-    "@cloudflare/vitest-plugin": "^1.3.6",
-    "@types/node": "^26.6.4",
-    "typescript": "^5.5.2",
-    "vitest": "~4.1.0",
-    "wrangler": "^4.147.0"
-  },
-  "allowScripts": {
-    "esbuild@0.28.1": true,
-    "workerd@1.20261001.1": true
-  },
-  "dependencies": {
-    "zod": "^4.4.3"
-  }
+	"name": "edgeguard",
+	"version": "0.0.0",
+	"private": true,
+	"scripts": {
+		"deploy": "wrangler deploy",
+		"dev": "wrangler dev",
+		"start": "wrangler dev",
+		"test": "vitest",
+		"cf-typegen": "wrangler types",
+		"typecheck": "tsc --noEmit",
+		"typecheck:test": "tsc --noEmit -p test/tsconfig.json",
+		"eval:analysis": "vitest run test/analysis-eval.spec.ts",
+		"eval:analysis:live": "node eval/live.mts",
+		"demo": "python3 demo/run.py"
+	},
+	"devDependencies": {
+		"@cloudflare/vitest-plugin": "^1.3.6",
+		"@types/node": "^26.6.4",
+		"typescript": "^5.5.2",
+		"vitest": "~4.1.0",
+		"wrangler": "^4.147.0"
+	},
+	"allowScripts": {
+		"esbuild@0.28.1": true,
+		"workerd@1.20261001.1": true
+	},
+	"dependencies": {
+		"zod": "^4.4.3"
+	}
 }
