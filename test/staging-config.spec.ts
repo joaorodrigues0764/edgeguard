@@ -24,7 +24,8 @@ describe('staging preflight', () => {
 	it('pairs the read and write datasets and pins staging resources', () => {
 		expect(template.name).toBe('edgeguard-staging');
 		expect(template.main).toBe('../src/staging.ts');
-		expect(template.vars).toEqual({ AI_GATEWAY_ID: 'edgeguard-staging', TELEMETRY_DATASET: 'edgeguard_staging_telemetry' });
+		expect(template).not.toHaveProperty('ai');
+		expect(template.vars).toEqual({ TELEMETRY_DATASET: 'edgeguard_staging_telemetry' });
 		expect(template.analytics_engine_datasets).toEqual([{ binding: 'EDGEGUARD_ANALYTICS', dataset: template.vars.TELEMETRY_DATASET }]);
 		expect(template.analytics.binding).toBe('ANALYTICS_SQL');
 		expect(template.d1_databases[0].database_name).toBe('edgeguard-staging-db');
@@ -48,7 +49,7 @@ describe('staging preflight', () => {
 		expect(() => checkStaging(sharedNamespace, production)).toThrow('namespace');
 	});
 
-	it.each(['queues', 'analytics_engine_datasets', 'vars', 'name'] as const)('rejects production %s in the deployable copy', (key) => {
+	it.each(['ai', 'queues', 'analytics_engine_datasets', 'vars', 'name'] as const)('rejects production %s in the deployable copy', (key) => {
 		const config = { ...filledConfig(), [key]: production[key] };
 
 		expect(() => checkStaging(config, production)).toThrow('reviewed template');
