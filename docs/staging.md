@@ -1,6 +1,40 @@
 # Controlled Cloudflare staging validation
 
-The [initial hosted REST evaluation](analysis-evaluation.md#follow-up-and-milestone-closeout) is complete. The staging Worker has yet to be deployed and its D1 database and queues have yet to be provisioned. The next proposed stage is an isolated Worker integration trial with a **$0 spending ceiling and zero AI calls**. Provisioning, remote migrations, deployment and synthetic traffic each require explicit approval.
+Milestone 4C closed with the first deployment of `edgeguard-staging` on November 11, 2026 and a one-event integration test on November 12. The [earlier hosted REST evaluation](analysis-evaluation.md#follow-up-and-milestone-closeout) used a separate execution path. Staging retains a **$0 additional spending ceiling and zero AI calls**. Provisioning, remote migrations, deployment and synthetic traffic each require explicit approval.
+
+## Milestone 4C validation record
+
+**Deployment, November 11, 2026.** All six repository migrations were applied to the isolated D1 database `edgeguard-staging-db`. Before deployment, the operator recorded zero events, zero incidents, one anomaly policy row and no pending migrations. Both staging queues were empty, with no producers or consumers. An initial deployment attempt returned a network-level `fetch failed` error. The operator checked that no staging Worker was visible before a controlled retry. Wrangler 4.147.0 then reported a successful deployment, an initial Worker startup time of 8 ms and registration of the producer and consumer.
+
+**Smoke test, November 12, 2026.** The operator submitted exactly one Bearer-authenticated `POST /api/events` using the staging ingestion token and the `Idempotency-Key` header `edgeguard-phase-f-healthy-20261111-01`. The following payload records the synthetic observation.
+
+```json
+{
+	"method": "GET",
+	"path": "/synthetic/phase-f-healthy-20261111",
+	"status": 200,
+	"latencyMs": 120,
+	"clientId": "phase-f-synthetic"
+}
+```
+
+| Verification method                                                               | Expected                                                               | Observed                                                                                                                                                                                                          |
+| --------------------------------------------------------------------------------- | ---------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Inspect the ingestion response                                                    | A new event with the submitted path                                    | HTTP `201 Created`. The returned path matched the payload.                                                                                                                                                        |
+| Query staging D1 by the idempotency key and count incidents                       | One matching healthy event, queue publication recorded, zero incidents | One matching row with the submitted method, path and status, `queue_status = 'sent'`, and zero incidents in the database.                                                                                         |
+| Inspect `edgeguard-staging-events` in the Queues dashboard                        | One acknowledgement, no retry or backlog                               | 1 ingested, 1 acknowledged, 0 retried. Realtime and average backlog after processing were both 0. Average consumer lag was 4.38 seconds. The dashboard counted 3 billable operations (1 write, 1 read, 1 delete). |
+| Inspect `edgeguard-staging-events-dlq` in the same dashboard                      | No dead-letter activity                                                | 0 ingested, 0 backlog, 0 retries and 0 billable operations.                                                                                                                                                       |
+| Query `GET /api/metrics/telemetry?hours=24` once with staging read authentication | The staging writer and Analytics SQL reader report the healthy event   | HTTP `200`, 1 observed event, 0 server errors, 120 ms average latency and 0 rejected ingestions from `edgeguard_staging_telemetry`.                                                                               |
+
+**Security and cost.** The Worker used four independently generated staging secrets and a rate limit of 10 requests per 10 seconds in a namespace separate from production. It had no `AI` binding, `AI_GATEWAY_ID` variable or Cron Trigger. No Workers AI inference was requested or executed during deployment or testing. Production resources were outside the intended change scope. The account had been verified as Workers Free and the trial used far less than the daily Worker request and Queue operation allowances. No additional monetary charges were reported in the evidence. Final billing remains unverified.
+
+**Coverage.** This test validated one healthy event through ingestion, persistence, queue acknowledgement and telemetry. Anomaly thresholds, incident creation, retry recovery, DLQ replay, rate-limit boundaries and real AI inference remain untested by this smoke test.
+
+## Next anomaly and incident trial
+
+1. Reconfirm the staging account, active version, D1 migrations, dataset, separate rate-limit namespace, queue consumer and empty backlogs. Verify that AI and Cron remain disabled and external producers are disconnected. Record the existing event and incident counts and current included allowances before adding traffic.
+2. Review the active anomaly policy and agree on a fresh synthetic method/path, unique idempotency keys, event order, pacing and UTC window. With the documented defaults, 15 healthy events followed by five 5xx events in the same window should open one high-severity incident on the twentieth event. Pace the requests within the staging limiter and check the expected opening against the active policy. [Detection thresholds and window](../README.md#endpoint-error-detection)
+3. Obtain explicit approval for the event count, verification reads, expected Queue operations, retry allowance, **$0 additional spend** and **zero inference**. Use read-only checks to correlate the opening event with one incident, its window evidence and analysis status `not_requested`. Stop on an unexpected response, delivery, incident count, inference or exhausted budget. Additional traffic, fault injection, replay, configuration changes and cleanup each need separate approval.
 
 ## Account and cost check before authorisation
 
@@ -27,12 +61,14 @@ The [initial hosted REST evaluation](analysis-evaluation.md#follow-up-and-milest
 | Dead-letter queue                      | `edgeguard-staging-events-dlq`                                                                                           |
 | Analytics Engine writer and SQL reader | `edgeguard_staging_telemetry`                                                                                            |
 | AI binding and gateway                 | Both absent                                                                                                              |
-| Rate limiting                          | Operator selects an unused positive integer namespace in the verified account                                            |
+| Rate limiting                          | 10 requests per 10 seconds in a staging namespace separate from production                                               |
 | Secrets                                | Fresh `INGEST_API_TOKEN`, `DASHBOARD_API_TOKEN`, `ADMIN_API_TOKEN` and `DASHBOARD_PASSWORD` scoped to the staging Worker |
 
 Staging has no Cron Trigger, so scheduled recovery generates no background traffic. The staging entry point refuses HTTP and queue dispatch if either `AI` or `AI_GATEWAY_ID` is supplied. Offline tests exercise ingestion and queue processing, including an anomalous incident saved as `not_requested` and an authenticated retry returning HTTP 503. The standalone REST evaluator runs separately. Enabling AI in this Worker later requires a separate configuration and code change, review, tests and explicit approval.
 
 Use only synthetic inputs and keep external producers disconnected. The SQL binding derives its scope from the Worker account. The application checks the staging dataset before dispatch, allows only two literal dataset names in SQL, and binds the time range as values. The writer's target is set by Wrangler. Its first write creates the dataset. Wrangler 4.145.0+ supports the separate `analytics.binding` setting, and the lockfile pins 4.147.0. Rate limiters with the same account and namespace share counters. [Analytics SQL binding](https://developers.cloudflare.com/workers/runtime-apis/bindings/analytics-sql/) · [Dataset syntax](https://developers.cloudflare.com/analytics/sql-api/datasets/) · [Analytics Engine bindings](https://developers.cloudflare.com/analytics/analytics-engine/get-started/) · [Rate limiting namespaces](https://developers.cloudflare.com/workers/runtime-apis/bindings/rate-limit/)
+
+The steps below describe first-time setup for an authorised deployment. The Milestone 4C resources already exist and their migrations are complete.
 
 1. **Prepare locally.** From the root run `node staging/check.mjs --init`. This creates an ignored `staging/wrangler.local.json` with three explicit placeholders and a pre-deployment check. It refuses to overwrite an existing file. CI and local Vitest use synthetic bindings. The checked-in staging template blocks deployment.
 2. **Provision only after approval.** In the verified account, check the resource inventory for existing names and owners. Obtain approval to create the named D1 database and two queues and reserve the namespace. Record returned IDs and ownership. Fill in only `account_id`, `database_id` and `namespace_id` in the local file. Never import production data or secrets. Wrangler can provision omitted IDs during deployment. [Wrangler provisioning](https://developers.cloudflare.com/workers/wrangler/configuration/#automatic-provisioning)
@@ -45,8 +81,8 @@ Use only synthetic inputs and keep external producers disconnected. The SQL bind
    ../node_modules/.bin/wrangler d1 migrations list edgeguard-staging-db --remote --config wrangler.local.json
    ```
 
-5. **Deploy only after approval of the Worker, consumer and new secrets.** Generate four distinct staging secrets in a password manager. Use at least 32 characters for the dashboard password. Supply the four entries in a protected JSON or dotenv file outside the checkout. Verify migrations are complete and compare the deployment configuration with the reviewed local template, including the absence of AI bindings and gateway variables. Use only the four application secrets. Recheck account identity, then use `../node_modules/.bin/wrangler deploy --config wrangler.local.json --secrets-file "$STAGING_SECRETS_FILE"` from `staging/`. The root deployment script targets production. [Worker secrets](https://developers.cloudflare.com/workers/configuration/secrets/)
-6. **Verify with an approved synthetic request budget.** Confirm the Worker URL, active version, bindings, queue consumer and empty backlog in the dashboard. Check `GET /health`, then a protected metrics request without a token (expect 401). With the staging ingest token, send one healthy event on a new synthetic route. With the staging read token, confirm D1 persistence and query `/api/metrics/telemetry?hours=1` after the first write becomes visible. Verify the staging dataset. Stop on an unexpected 503, resource mismatch, pending deliveries, unapproved traffic or any evidence of inference attributable to this Worker.
+5. **Deploy only after approval of the Worker, consumer and new secrets.** Generate four distinct staging secrets in a password manager. Use at least 32 characters for the dashboard password. Supply the four entries in a protected JSON or dotenv file outside the checkout. Verify migrations are complete and compare the deployment configuration with the reviewed local template, including the absence of AI bindings and gateway variables. Use only the four application secrets. Recheck account identity, then use `../node_modules/.bin/wrangler deploy --config wrangler.local.json --no-experimental-provision --no-experimental-auto-create --secrets-file "$STAGING_SECRETS_FILE"` from `staging/`. These Wrangler 4.147.0 flags disable automatic binding provisioning and draft-resource creation. On a deployment error, inspect the Worker and queue consumer before considering a retry. The root deployment script targets production. [Worker secrets](https://developers.cloudflare.com/workers/configuration/secrets/)
+6. **Verify with an approved synthetic request budget.** Confirm the Worker URL, active version, bindings, queue consumer and empty backlog in the dashboard. Check `GET /health`, then a protected metrics request without a token (expect 401). With the staging ingest token, send one healthy event on a new synthetic route. Confirm D1 persistence with a read-only query scoped to the staging database. With the staging read token, query `/api/metrics/telemetry?hours=24` after the first write becomes visible. Verify the staging dataset. Stop on an unexpected 503, resource mismatch, pending deliveries, unapproved traffic or any evidence of inference attributable to this Worker.
 
 ## Rollback and cleanup
 
