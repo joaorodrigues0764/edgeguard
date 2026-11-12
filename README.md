@@ -4,7 +4,7 @@
 
 EdgeGuard ingests application events, detects anomalous behaviour, creates incidents, and exposes operational metrics through an authenticated API. It uses Cloudflare's developer platform to demonstrate event-driven architecture, serverless data processing, observability, and role-based access control.
 
-For a controlled Cloudflare test, start with the [staging setup, cost checks and approval steps](docs/staging.md).
+On November 12, 2026, the isolated staging Worker accepted one healthy synthetic event. D1 retained it, the queue consumer acknowledged it, and a telemetry query returned its reported latency of 120 ms. See the [Milestone 4C validation record and staging runbook](docs/staging.md#milestone-4c-validation-record).
 
 ## Try the synthetic demo
 
@@ -364,7 +364,7 @@ The consumer configuration names `edgeguard-events-dlq` as the destination for e
 2. Correct the processing failure. For a valid event that still needs processing, send `{"type":"event.received","eventId":"<original D1 event ID>"}` as **JSON** to `edgeguard-events`. This replays the existing event through the consumer. [Send a queue message](https://developers.cloudflare.com/queues/examples/send-messages-from-dash/)
 3. Confirm processing succeeded before acknowledging the selected DLQ copy. For an event with an opening in `anomaly_episodes`, verify the incident for its original event ID and its analysis state. A persisted `failed` analysis can be retried through the administrator endpoint.
 
-To verify hosted routing in isolated staging, install the following temporary trigger in its D1 database on a fresh endpoint. Submit 20 HTTP 503 events within one window, all with method GET and path `/synthetic/dlq-check`. Pace ingestion within its rate limit.
+The following fault-injection procedure requires separate approval for staging D1 changes, traffic, retries and replay. Use the isolated staging queues for every step. See the [staging prerequisites and approval boundaries](docs/staging.md#next-anomaly-and-incident-trial). To verify hosted routing, install the temporary trigger in the staging database and submit 20 HTTP 503 events within one window, all with method GET and a fresh synthetic path matching the trigger. Pace ingestion within its rate limit.
 
 ```sql
 CREATE TRIGGER fail_dlq_check BEFORE INSERT ON incidents
