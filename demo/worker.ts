@@ -1,6 +1,9 @@
 // Local demo entry point only. The production entry point cannot load this fixture.
 import worker, { type Env } from '../src/index';
 
+const percent = new Intl.NumberFormat('en-GB', { maximumFractionDigits: 2 });
+const latency = new Intl.NumberFormat('en-GB', { maximumFractionDigits: 1 });
+
 const fixture = {
 	async run(_model: string, input: { messages: { content: string }[] }) {
 		const evidence = JSON.parse(input.messages[1].content);
@@ -8,10 +11,10 @@ const fixture = {
 		if ('serverErrors' in evidence) {
 			const { serverErrors, totalRequests, errorPercent, averageLatencyMs } = evidence;
 			summary =
-				`The endpoint returned HTTP 5xx for ${serverErrors} of ${totalRequests} requests (${errorPercent}%). ` +
-				`Mean latency was ${averageLatencyMs} ms.`;
+				`The endpoint returned HTTP 5xx for ${serverErrors} of ${totalRequests} requests (${percent.format(errorPercent)}%). ` +
+				`Mean latency was ${latency.format(averageLatencyMs)} ms.`;
 		} else {
-			summary = `The request returned HTTP ${evidence.status} in ${evidence.latencyMs} ms.`;
+			summary = `The request returned HTTP ${evidence.status} in ${latency.format(evidence.latencyMs)} ms.`;
 		}
 
 		return {

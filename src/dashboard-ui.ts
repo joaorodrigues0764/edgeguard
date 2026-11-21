@@ -524,7 +524,37 @@ const labels = {
 
 let incidents = [],
 	selected = null,
-	generation = 0;
+	detailSnapshot = null,
+	generation = 0,
+	authenticated = false,
+	pageActive = true,
+	mutating = false,
+	pollTimer = null,
+	refreshing = null,
+	refreshQueued = null,
+	readController = null;
+
+function stopPolling() {
+	clearTimeout(pollTimer);
+	pollTimer = null;
+}
+
+function canRefresh() {
+	return authenticated && pageActive && !document.hidden && !mutating;
+}
+
+function schedulePolling() {
+	stopPolling();
+	if (canRefresh() && !refreshing) {
+		pollTimer = setTimeout(() => refresh(true), 3000);
+	}
+}
+
+function invalidateReads() {
+	generation++;
+	readController?.abort();
+	stopPolling();
+}
 
 const number = (value) => new Intl.NumberFormat('en-GB', { maximumFractionDigits: 1 }).format(value);
 const date = (value) => new Date(value).toLocaleString('en-GB');
@@ -545,14 +575,16 @@ function message(text = '') {
 }
 
 function session(active) {
+	authenticated = active;
+	invalidateReads();
 	$('login').hidden = active;
 	$('app').hidden = !active;
 	$('logout').hidden = !active;
 
 	if (!active) {
-		generation++;
 		incidents = [];
 		selected = null;
+		detailSnapshot = null;
 		$('rows').replaceChildren();
 		$('metrics').replaceChildren();
 		$('chart').replaceChildren();
@@ -571,10 +603,14 @@ async function api(path, options = {}) {
 	});
 
 	const result = await response.json();
+	if (options.signal?.aborted) {
+		throw new DOMException('Refresh cancelled.', 'AbortError');
+	}
 
 	if (!response.ok) {
 		if (response.status === 401) {
 			session(false);
+			message(result.error || 'Sign in to continue.');
 		}
 		throw new Error(result.error || 'Request failed.');
 	}
@@ -587,7 +623,12 @@ function badge(value) {
 }
 
 function detail(item) {
+	const snapshot = JSON.stringify(item);
+	if (selected === item.id && detailSnapshot === snapshot) {
+		return;
+	}
 	selected = item.id;
+	detailSnapshot = snapshot;
 	const panel = $('detail');
 
 	panel.replaceChildren(el('p', 'INVESTIGATION', 'eyebrow'), el('h2', item.eventMethod + ' ' + item.eventPath), badge(item.severity));
@@ -646,15 +687,21 @@ function detail(item) {
 	if (item.analysisState === 'failed') {
 		const retry = el('button', 'Retry analysis');
 		retry.onclick = async () => {
+			mutating = true;
+			invalidateReads();
 			retry.disabled = true;
+			let failure = '';
 			try {
 				await api('api/incidents/' + encodeURIComponent(item.id) + '/analysis/retry', { method: 'POST' });
-				await loadIncidents();
 			} catch (error) {
-				await loadIncidents();
-				message(error.message);
+				failure = error.message;
 			} finally {
+				mutating = false;
 				retry.disabled = false;
+				await refresh();
+				if (failure) {
+					message(failure);
+				}
 			}
 		};
 		panel.append(retry);
@@ -663,6 +710,8 @@ function detail(item) {
 	const button = el('button', item.status === 'open' ? 'Mark as resolved' : 'Reopen incident', 'primary');
 
 	button.addEventListener('click', async () => {
+		mutating = true;
+		invalidateReads();
 		button.disabled = true;
 		message();
 
@@ -672,22 +721,28 @@ function detail(item) {
 				body: JSON.stringify({ status: item.status === 'open' ? 'resolved' : 'open' }),
 			});
 
-			detail(updated);
-			await refresh();
-			message('Status updated.');
+			if (authenticated) {
+				if (selected === item.id) {
+					detail(updated);
+				}
+				message('Status updated.');
+			}
 		} catch (error) {
 			message(error.message);
 		} finally {
+			mutating = false;
 			button.disabled = false;
+			await refresh(true);
 		}
 	});
 
 	panel.append(button);
 }
 
-async function loadIncidents() {
-	const version = ++generation;
-	$('list-status').textContent = 'Loading incidents…';
+async function loadIncidents(version, background, signal) {
+	if (!background) {
+		$('list-status').textContent = 'Loading incidents…';
+	}
 
 	const query = new URLSearchParams({ limit: '100' });
 	for (const name of ['status', 'severity']) {
@@ -697,15 +752,21 @@ async function loadIncidents() {
 	}
 
 	try {
-		const items = await api('api/incidents?' + query);
+		const items = await api('api/incidents?' + query, { signal });
 		if (version !== generation) {
 			return;
 		}
+		if (background && $('rows').contains(document.activeElement)) {
+			return;
+		}
 
+		const changed = JSON.stringify(items) !== JSON.stringify(incidents);
+		if (changed) {
+			$('rows').replaceChildren();
+		}
 		incidents = items;
-		$('rows').replaceChildren();
 
-		for (const item of items) {
+		for (const item of changed ? items : []) {
 			const tr = el('tr');
 			const endpoint = el('td', item.eventMethod + ' ' + item.eventPath);
 			const severity = el('td');
@@ -732,26 +793,29 @@ async function loadIncidents() {
 
 		if (selected) {
 			const item = items.find((i) => i.id === selected);
-			if (item) {
+			const selection = window.getSelection();
+			const interacting =
+				(document.activeElement !== $('detail') && $('detail').contains(document.activeElement)) ||
+				(selection && !selection.isCollapsed && $('detail').contains(selection.anchorNode));
+			if (item && !(background && interacting)) {
 				detail(item);
-			} else {
-				selected = null;
-				$('detail').replaceChildren(el('h2', 'Select an incident'), el('p', 'The selected incident no longer matches this list.'));
 			}
 		}
 	} catch (error) {
 		if (version !== generation) {
 			return;
 		}
-		$('rows').replaceChildren();
 		$('list-status').textContent = 'Could not load incidents.';
 		throw error;
 	}
 }
 
-async function metrics() {
+async function metrics(version, background, signal) {
 	try {
-		const data = await api('api/metrics');
+		const data = await api('api/metrics', { signal });
+		if (version !== generation) {
+			return;
+		}
 		$('metrics').replaceChildren();
 
 		const metricList = [
@@ -771,14 +835,22 @@ async function metrics() {
 			$('metrics').append(card);
 		}
 	} catch (error) {
-		$('metrics').replaceChildren(el('p', 'Metrics unavailable.'));
+		if (version !== generation) {
+			return;
+		}
+		if (!background) {
+			$('metrics').replaceChildren(el('p', 'Metrics unavailable.'));
+		}
 		throw error;
 	}
 }
 
-async function chart() {
+async function chart(version, background, signal) {
 	try {
-		const data = await api('api/metrics/timeseries?hours=24');
+		const data = await api('api/metrics/timeseries?hours=24', { signal });
+		if (version !== generation) {
+			return;
+		}
 		$('chart').replaceChildren();
 		const max = Math.max(1, ...data.points.map((p) => p.total));
 
@@ -811,26 +883,59 @@ async function chart() {
 			number(data.points.reduce((sum, p) => sum + p.total, 0)) +
 			' events';
 	} catch (error) {
-		$('chart').replaceChildren();
-		$('chart-summary').textContent = 'Activity unavailable.';
+		if (version !== generation) {
+			return;
+		}
+		if (!background) {
+			$('chart').replaceChildren();
+			$('chart-summary').textContent = 'Activity unavailable.';
+		}
 		throw error;
 	}
 }
 
-async function refresh() {
-	$('refresh').disabled = true;
-	message();
-
-	const results = await Promise.allSettled([metrics(), chart(), loadIncidents()]);
-	const errors = results.filter((r) => r.status === 'rejected');
-
-	$('updated').textContent = errors.length ? 'Refresh incomplete. Try again.' : 'Updated at ' + new Date().toLocaleTimeString('en-GB');
-
-	if (errors.length) {
-		message(errors.map((r) => r.reason.message).join(' '));
+function refresh(background = false) {
+	if (!canRefresh()) {
+		return Promise.resolve();
 	}
+	if (refreshing) {
+		// An explicit refresh takes priority over a queued background refresh.
+		refreshQueued = refreshQueued === false ? false : background;
+		return refreshing;
+	}
+	stopPolling();
+	$('refresh').disabled = true;
+	refreshing = (async () => {
+		do {
+			background = refreshQueued ?? background;
+			refreshQueued = null;
+			if (!background) {
+				message();
+			}
+			const version = ++generation;
+			readController = new AbortController();
+			const signal = readController.signal;
+			const results = await Promise.allSettled([
+				metrics(version, background, signal),
+				chart(version, background, signal),
+				loadIncidents(version, background, signal),
+			]);
+			if (version === generation) {
+				const errors = results.filter((r) => r.status === 'rejected');
+				$('updated').textContent = errors.length ? 'Refresh incomplete. Try again.' : 'Updated at ' + new Date().toLocaleTimeString('en-GB');
+				if (errors.length && !background) {
+					message(errors.map((r) => r.reason.message).join(' '));
+				}
+			}
+		} while (refreshQueued !== null && canRefresh());
+	})().finally(() => {
+		refreshing = null;
+		readController = null;
+		$('refresh').disabled = false;
+		schedulePolling();
+	});
 
-	$('refresh').disabled = false;
+	return refreshing;
 }
 
 $('login-form').onsubmit = async (event) => {
@@ -856,20 +961,43 @@ $('login-form').onsubmit = async (event) => {
 };
 
 $('logout').onclick = async () => {
+	mutating = true;
+	invalidateReads();
 	try {
 		await api('logout', { method: 'POST' });
 		session(false);
 		message('Signed out.');
 	} catch (error) {
 		message(error.message);
+	} finally {
+		mutating = false;
+		schedulePolling();
 	}
 };
 
-$('refresh').onclick = refresh;
+$('refresh').onclick = () => refresh();
 
 for (const name of ['status', 'severity']) {
-	$(name).onchange = () => loadIncidents().catch((error) => message(error.message));
+	$(name).onchange = () => {
+		invalidateReads();
+		refresh();
+	};
 }
+
+document.addEventListener('visibilitychange', () => {
+	invalidateReads();
+	if (!document.hidden) {
+		refresh(true);
+	}
+});
+window.addEventListener('pagehide', () => {
+	pageActive = false;
+	invalidateReads();
+});
+window.addEventListener('pageshow', () => {
+	pageActive = true;
+	refresh(true);
+});
 
 (async () => {
 	try {
