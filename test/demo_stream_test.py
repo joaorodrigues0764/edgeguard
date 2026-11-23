@@ -3,11 +3,12 @@
 import contextlib
 import io
 import json
+import socket
 import unittest
 import urllib.error
 from unittest.mock import patch
 
-from demo.run import run_stream
+from demo.run import ensure_port_free, run_stream
 
 
 class Response(io.BytesIO):
@@ -164,6 +165,26 @@ class StreamTests(unittest.TestCase):
             self.run_scenario(api)
 
         self.assertLess(api.elapsed, 90)
+
+
+class PortCheckTest(unittest.TestCase):
+    def test_accepts_free_port(self):
+        with socket.socket() as probe:
+            probe.bind(('127.0.0.1', 0))
+            port = probe.getsockname()[1]
+
+        ensure_port_free(port)
+
+    def test_exits_with_message_when_port_is_in_use(self):
+        with socket.socket() as listener:
+            listener.bind(('127.0.0.1', 0))
+            listener.listen()
+            port = listener.getsockname()[1]
+
+            with self.assertRaises(SystemExit) as raised:
+                ensure_port_free(port)
+
+        self.assertIn(f'Port {port} on 127.0.0.1 is unavailable', str(raised.exception.code))
 
 
 if __name__ == '__main__':

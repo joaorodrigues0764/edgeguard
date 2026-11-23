@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import secrets
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
@@ -25,6 +26,21 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 # Loopback requests must not inherit a proxy or follow redirects elsewhere.
 HTTP = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
+
+
+def ensure_port_free(port):
+    """Exit with a clear message if another process is listening on the demo port."""
+    with socket.socket() as probe:
+        # Sockets left in TIME_WAIT by a previous run must not block a new demo.
+        probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            probe.bind(('127.0.0.1', port))
+        except OSError as error:
+            sys.exit(
+                f'Port {port} on 127.0.0.1 is unavailable ({error.strerror}). '
+                f'Stop the process using it (for example, check `ss -ltnp | grep {port}`) '
+                'and run the demo again.'
+            )
 
 
 def run_stream(url, credentials):
@@ -185,6 +201,8 @@ def main():
         sys.exit('Usage: python3 demo/run.py [--live | --stream]')
     PORT = 8793 if LIVE else 8792
     URL = f'http://127.0.0.1:{PORT}'
+    # Fail before applying migrations or seeding data.
+    ensure_port_free(PORT)
     os.umask(0o077)
     with tempfile.TemporaryDirectory(prefix='edgeguard-demo-') as directory:
         base = Path(directory)
@@ -256,10 +274,8 @@ def main():
                 'client_id,created_at,queue_status) VALUES ' + ','.join(rows) + ';'
             )
             wrangler('d1', 'execute', 'edgeguard-db', '--local', '--file', str(seed))
-        # Check the port before sending any requests to it.
-        import socket
-        with socket.socket() as probe:
-            probe.bind(('127.0.0.1', PORT))
+        # Recheck in case the port was taken while migrations were running.
+        ensure_port_free(PORT)
         local = ['--local'] if STREAM else []
         proc = subprocess.Popen(
             [CLI, 'dev', *local, '--ip', '127.0.0.1', '--port', str(PORT), *common],
