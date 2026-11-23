@@ -45,3 +45,9 @@ jobs:
 
       - name: Run tests
         run: npm test -- --run
+
+      - name: Run dashboard UI tests
+        run: npm run test:dashboard-ui
+
+      - name: Run demo launcher tests
+        run: npm run test:demo

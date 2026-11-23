@@ -8,6 +8,7 @@
 		"start": "wrangler dev",
 		"test": "vitest",
 		"test:dashboard-ui": "node test/dashboard-ui.node.mjs",
+		"test:demo": "python3 -m unittest test.demo_stream_test",
 		"cf-typegen": "wrangler types",
 		"typecheck": "tsc --noEmit",
 		"typecheck:test": "tsc --noEmit -p test/tsconfig.json",
