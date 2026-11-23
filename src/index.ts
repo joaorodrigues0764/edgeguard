@@ -20,6 +20,7 @@ import {
 } from './incidents';
 import { writeEventTelemetry, writeRateLimitedTelemetry } from './telemetry';
 import { getDashboardMetrics, getDashboardTimeSeries } from './metrics';
+import { getIncidentTimeline } from './timeline';
 import { authorizeRequest, type ApiRole } from './auth';
 import { getTelemetryMetrics } from './analytics';
 import { retryPendingEvents } from './delivery';
@@ -142,6 +143,8 @@ const worker = {
 			method === 'GET' &&
 			['/api/events', '/api/incidents', '/api/metrics', '/api/metrics/timeseries', '/api/metrics/telemetry'].includes(path)
 		) {
+			allowedRoles = ['dashboard', 'admin'];
+		} else if (method === 'GET' && /^\/api\/incidents\/[a-zA-Z0-9-]+\/timeline$/.test(path)) {
 			allowedRoles = ['dashboard', 'admin'];
 		} else if (method === 'PATCH' && /^\/api\/incidents\/[^/]+$/.test(path)) {
 			allowedRoles = ['admin'];
@@ -359,6 +362,32 @@ const worker = {
 				return Response.json(
 					{
 						error: 'Failed to fetch incidents',
+					},
+					{ status: 500 },
+				);
+			}
+		}
+
+		// Detection timeline reconstructed from stored reports
+		const timelineMatch = method === 'GET' && path.match(/^\/api\/incidents\/([a-zA-Z0-9-]+)\/timeline$/);
+
+		if (timelineMatch) {
+			try {
+				const timeline = await getIncidentTimeline(env.edgeguard_db, timelineMatch[1]);
+
+				if (timeline === undefined) {
+					return Response.json({ error: 'Incident not found' }, { status: 404 });
+				}
+
+				return Response.json({
+					data: timeline,
+				});
+			} catch (error) {
+				console.error('Failed to fetch incident timeline:', error);
+
+				return Response.json(
+					{
+						error: 'Failed to fetch incident timeline',
 					},
 					{ status: 500 },
 				);

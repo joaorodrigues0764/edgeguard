@@ -419,6 +419,59 @@ td button {
     margin: 0;
 }
 
+.timeline svg {
+    display: block;
+    width: 100%;
+    height: auto;
+    margin-top: 10px;
+}
+
+.timeline .axis {
+    stroke: #26303d;
+    stroke-width: 1;
+}
+
+.timeline .threshold {
+    stroke: #ffb1ad;
+    stroke-width: 1;
+    stroke-dasharray: 4 3;
+}
+
+.timeline .rate {
+    fill: none;
+    stroke: #bef264;
+    stroke-width: 1.5;
+}
+
+.timeline circle.eligible {
+    fill: #bef264;
+}
+
+.timeline circle.ineligible {
+    fill: #0b1017;
+    stroke: #8b9aac;
+    stroke-width: 1;
+}
+
+.timeline circle.opening {
+    fill: #ffd09b;
+    stroke: #0b1017;
+    stroke-width: 1.5;
+}
+
+.timeline text {
+    fill: #93a4b7;
+    font-size: 9px;
+}
+
+.timeline text.threshold-label {
+    fill: #ffb1ad;
+}
+
+.timeline p {
+    font-size: 12px;
+}
+
 .notice {
     border-left: 2px solid #73849b;
     padding-left: 13px;
@@ -653,8 +706,16 @@ function detail(item) {
 		}
 	}
 
+	panel.append(dl);
+
+	if (item.evidence) {
+		const timeline = el('div', undefined, 'timeline');
+		timeline.append(el('p', 'Loading detection timeline…', 'muted'));
+		panel.append(el('h3', 'Detection timeline'), timeline);
+		loadTimeline(item.id, timeline);
+	}
+
 	panel.append(
-		dl,
 		el('h3', 'Rule analysis'),
 		el('p', item.reason),
 		el('h3', 'AI analysis'),
@@ -737,6 +798,117 @@ function detail(item) {
 	});
 
 	panel.append(button);
+}
+
+function svg(tag, attributes, cls) {
+	const node = document.createElementNS('http://www.w3.org/2000/svg', tag);
+	for (const [name, value] of Object.entries(attributes)) {
+		node.setAttribute(name, String(value));
+	}
+	if (cls) {
+		node.setAttribute('class', cls);
+	}
+	return node;
+}
+
+function renderTimeline(container, data) {
+	const points = data && Array.isArray(data.points) ? data.points : [];
+	if (!points.length) {
+		container.replaceChildren(el('p', 'No stored reports are available to replay for this incident.', 'muted'));
+		return;
+	}
+
+	const width = 320;
+	const height = 150;
+	const left = 34;
+	const right = 8;
+	const top = 10;
+	const bottom = 22;
+	const plotWidth = width - left - right;
+	const plotHeight = height - top - bottom;
+	const maxRate = Math.max(...points.map((p) => p.errorPercent));
+	const yMax = Math.min(100, Math.max(data.openPercent * 2, Math.ceil(maxRate / 10) * 10));
+	const x = (i) => left + (points.length === 1 ? plotWidth / 2 : (i * plotWidth) / (points.length - 1));
+	const y = (rate) => top + plotHeight - (rate * plotHeight) / yMax;
+	const openingIndex = points.findIndex((p) => p.opening);
+	const opening = points[openingIndex];
+
+	const summary =
+		'Window HTTP 5xx rate after each of ' +
+		number(points.length) +
+		' reports to ' +
+		data.method +
+		' ' +
+		data.path +
+		(opening
+			? '. Opening report #' + (openingIndex + 1) + ': ' + opening.windowErrors + ' / ' + opening.windowRequests + ' (' + number(opening.errorPercent) + '%).'
+			: '.');
+
+	const chart = svg('svg', { viewBox: '0 0 ' + width + ' ' + height, role: 'img', 'aria-label': summary });
+
+	for (const rate of [0, data.openPercent, yMax]) {
+		const line = svg('line', { x1: left, x2: width - right, y1: y(rate), y2: y(rate) }, rate === data.openPercent ? 'threshold' : 'axis');
+		const label = svg('text', { x: left - 4, y: y(rate) + 3, 'text-anchor': 'end' }, rate === data.openPercent ? 'threshold-label' : '');
+		label.textContent = number(rate) + '%';
+		chart.append(line, label);
+	}
+
+	const thresholdLabel = svg('text', { x: width - right, y: y(data.openPercent) - 4, 'text-anchor': 'end' }, 'threshold-label');
+	thresholdLabel.textContent = 'Opens above ' + number(data.openPercent) + '%';
+	chart.append(thresholdLabel);
+
+	chart.append(svg('polyline', { points: points.map((p, i) => x(i) + ',' + y(p.errorPercent)).join(' ') }, 'rate'));
+
+	points.forEach((p, i) => {
+		// Dense timelines keep only the opening marker readable.
+		if (points.length > 200 && !p.opening) {
+			return;
+		}
+		const cls = p.opening ? 'opening' : p.eligible ? 'eligible' : 'ineligible';
+		const point = svg('circle', { cx: x(i), cy: y(p.errorPercent), r: p.opening ? 4 : 2.5 }, cls);
+		const title = svg('title', {});
+		title.textContent =
+			'#' + (i + 1) + ' · HTTP ' + p.status + ' · ' + date(p.createdAt) + ' · window ' + p.windowErrors + ' / ' + p.windowRequests + ' (' + number(p.errorPercent) + '%)';
+		point.append(title);
+		chart.append(point);
+	});
+
+	for (const [index, anchor] of [
+		[0, 'start'],
+		[points.length - 1, 'end'],
+	]) {
+		const label = svg('text', { x: x(index), y: height - 6, 'text-anchor': anchor });
+		label.textContent = '#' + (index + 1);
+		chart.append(label);
+	}
+
+	const notes = [
+		'Replayed from stored reports in ingestion order with the rolling ' +
+			data.windowMinutes +
+			'-minute window and the thresholds recorded at opening. Hollow points are below the minimum sample (' +
+			data.minRequests +
+			' requests, ' +
+			data.minFailures +
+			' HTTP 5xx).',
+	];
+	if (data.truncated) {
+		notes.push('Only the first ' + number(points.length) + ' reports are shown.');
+	}
+
+	container.replaceChildren(chart, el('p', summary), el('p', notes.join(' '), 'muted'));
+}
+
+async function loadTimeline(id, container) {
+	try {
+		const data = await api('api/incidents/' + encodeURIComponent(id) + '/timeline');
+		if (selected === id && $('detail').contains(container)) {
+			renderTimeline(container, data);
+		}
+	} catch (error) {
+		if (selected === id && $('detail').contains(container)) {
+			container.replaceChildren(el('p', 'Detection timeline unavailable.', 'muted'));
+		}
+	}
 }
 
 async function loadIncidents(version, background, signal) {

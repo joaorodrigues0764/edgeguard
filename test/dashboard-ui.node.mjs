@@ -314,3 +314,69 @@ test('finishing a write does not replace a different incident selected meanwhile
 	assert.match(text(ui.$('detail')), /GET \/search/);
 	assert.equal(ui.timers.size, 1);
 });
+
+test('renders the replayed detection timeline for incidents with opening evidence', async () => {
+	const ui = await dashboard();
+	ui.state.items[0].evidence = {
+		windowStartMs: 0,
+		windowEndExclusiveMs: 300000,
+		totalRequests: 26,
+		serverErrors: 6,
+		errorPercent: 23.076923,
+		averageLatencyMs: 192.3,
+	};
+	const points = [
+		{ eventId: 'a', createdAt: 0, status: 200, windowRequests: 20, windowErrors: 0, errorPercent: 0, eligible: false, opening: false },
+		{ eventId: 'b', createdAt: 0, status: 503, windowRequests: 25, windowErrors: 5, errorPercent: 20, eligible: true, opening: false },
+		{ eventId: 'c', createdAt: 0, status: 503, windowRequests: 26, windowErrors: 6, errorPercent: 23.076923, eligible: true, opening: true },
+	];
+	ui.state.intercept = (path) => {
+		if (path.endsWith('/incident-1/timeline')) {
+			return response({
+				method: 'GET',
+				path: '/checkout',
+				windowMinutes: 5,
+				openPercent: 20,
+				minRequests: 20,
+				minFailures: 5,
+				truncated: false,
+				points,
+			});
+		}
+		return null;
+	};
+
+	await ui.$('refresh').onclick();
+	selectFirst(ui);
+	await flush();
+
+	const detail = text(ui.$('detail'));
+	assert.match(detail, /Detection timeline/);
+	assert.match(detail, /Opening report #3: 6 \/ 26 \(23\.1%\)/);
+	assert.match(detail, /Opens above 20%/);
+	assert.ok(ui.requests.some((request) => request.path === '/dashboard/api/incidents/incident-1/timeline'));
+});
+
+test('shows a fallback when the detection timeline cannot be loaded', async () => {
+	const ui = await dashboard();
+	ui.state.items[0].evidence = {
+		windowStartMs: 0,
+		windowEndExclusiveMs: 300000,
+		totalRequests: 26,
+		serverErrors: 6,
+		errorPercent: 23.076923,
+		averageLatencyMs: 192.3,
+	};
+	ui.state.intercept = (path) => {
+		if (path.endsWith('/timeline')) {
+			return { ok: false, status: 500, json: async () => ({ error: 'Failed to fetch incident timeline' }) };
+		}
+		return null;
+	};
+
+	await ui.$('refresh').onclick();
+	selectFirst(ui);
+	await flush();
+
+	assert.match(text(ui.$('detail')), /Detection timeline unavailable\./);
+});
