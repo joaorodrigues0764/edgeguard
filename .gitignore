@@ -167,3 +167,7 @@ dist
 .wrangler/
 
 /staging/wrangler.local.json
+
+# Python bytecode
+
+__pycache__/
