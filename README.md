@@ -17,6 +17,8 @@ npm run demo
 
 Open the loopback dashboard URL printed in the terminal and use its temporary password. The demo runs without a Cloudflare account or a project `.dev.vars`. Each run migrates a fresh temporary D1 database, seeds healthy hourly history and 19 recent observations per demo endpoint, then sends the twentieth request for each spike through the actual ingestion and queue paths. Refresh after the queue processes the batch. Select **GET /synthetic/checkout**, inspect its analysis, mark it resolved and use the status filter to find and reopen it. Ctrl+C discards the demo state. The chart is relative to the current hour; IDs, timestamps and the temporary password change each run.
 
+To watch the detector cross its threshold in real time, run `npm run demo -- --stream`. It seeds nothing: every observation is a synthetic report sent through the authenticated `POST /api/events` endpoint, paced within the ingestion rate limiter. Three phases target one fresh endpoint: 20 HTTP 200 reports (0%), five HTTP 503 reports (exactly 20%, no incident) and one more HTTP 503 (6/26, 23.08%), which opens exactly one high-severity incident through the queue. The launcher verifies each phase through the API and stops on any mismatch.
+
 The demo uses a deterministic **fixture** instead of a hosted model. The banner and synthetic paths identify the sample data. For one real inference without deploying, follow the [live smoke test](docs/live-smoke.md).
 
 The screenshots below show the earlier per-event detector. The current detail panel also shows the opening window.
@@ -144,6 +146,7 @@ All protected endpoints require a Bearer token. Health and dashboard sign-in ass
 | `POST`  | `/api/events`                       | Ingestion                                     |
 | `GET`   | `/api/events?limit=20`              | Dashboard or administrator                    |
 | `GET`   | `/api/incidents?limit=20`           | Dashboard or administrator                    |
+| `GET`   | `/api/incidents/:id/timeline`       | Dashboard or administrator                    |
 | `PATCH` | `/api/incidents/:id`                | Administrator                                 |
 | `POST`  | `/api/incidents/:id/analysis/retry` | Administrator; failed or expired attempt only |
 | `GET`   | `/api/metrics`                      | Dashboard or administrator                    |
@@ -320,6 +323,13 @@ Run the complete test suite:
 npm test -- --run
 ```
 
+Run the dashboard script and demo launcher tests:
+
+```bash
+npm run test:dashboard-ui
+npm run test:demo
+```
+
 Check TypeScript compilation:
 
 ```bash
@@ -382,6 +392,7 @@ Find the opening event in `anomaly_episodes`, confirm it is marked `sent` in `ev
 - `/api/metrics/telemetry` separately queries Analytics Engine through Analytics SQL; its rolling time window differs from the calendar-hour buckets used by `/api/metrics/timeseries`.
 - `rateLimitedResponses` in the dashboard metrics counts observed application events with HTTP status `429`. Requests rejected by EdgeGuard's own ingestion rate limiter are recorded separately in Analytics Engine and are not included in the D1 event total.
 - Time-series timestamps represent the start of each hour in Unix milliseconds.
+- The detection timeline is reconstructed on read: it replays the endpoint's stored reports in insertion order with the same minute-bucket window as the D1 trigger, using the thresholds recorded in the opening evidence. It covers one window before and after the opening minute and is capped at 2,000 reports. Tests check that the replayed opening point matches the immutable evidence.
 - The ingestion rate limiter is keyed by the connecting client IP address.
 - Bearer tokens use static configured secrets. This project does not currently implement user accounts, per-user identities, or expiring access tokens.
 - For a window incident, the model receives the opening snapshot with a bounded, query-free endpoint label, including the method, window bounds, 5xx count, sample size, error percentage and mean latency. Historical incidents without a snapshot supply the event’s HTTP status and latency. The prompt treats telemetry as untrusted data and asks for an observed summary, explicitly hypothetical causes and suggested checks. Analysis never updates incident status.
@@ -404,7 +415,7 @@ EdgeGuard is a portfolio project demonstrating serverless backend engineering an
 
 ## Dashboard
 
-Open `/dashboard` or `/` to view all-time D1 metrics, hourly activity for the last 24 hours and up to 100 recent incidents per filter. Select an incident to inspect its rule and event details, resolve it or reopen it. Data refreshes on sign-in, on request and after status changes. The detail panel shows analysis state, validated results and a retry action for failed analysis.
+Open `/dashboard` or `/` to view all-time D1 metrics, hourly activity for the last 24 hours and up to 100 recent incidents per filter. Select an incident to inspect its rule and event details, resolve it or reopen it. For window incidents, the **detection timeline** plots the rolling-window HTTP 5xx rate after each report to that endpoint, with the opening threshold and the opening report marked. Data refreshes on sign-in, on request and after status changes. The detail panel shows analysis state, validated results and a retry action for failed analysis.
 
 Configure the three distinct API tokens described above and a separate `DASHBOARD_PASSWORD` of at least 32 characters. Generate a password with `openssl rand -hex 32` and set it in the ignored local `.dev.vars` file. For production, use `npx wrangler secret put DASHBOARD_PASSWORD`.
 
